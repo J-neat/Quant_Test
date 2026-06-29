@@ -17,11 +17,52 @@ def get_stock_data(ticker, period='6mo'):
 def get_fundamental_data(ticker):
     stock = yf.Ticker(ticker)
     info = stock.info
+    
+    # 1. PER (주가수익비율) 추정
+    # 우선적으로 과거 실적(trailingPE)을 찾고, 없으면 향후 12개월 예상치(forwardPE)를 사용
+    per = info.get('trailingPE')
+    if not per:
+        per = info.get('forwardPE', 0)
+        
+    # 2. PBR (주가순자산비율) 추정
+    # priceToBook이 없으면, 현재가(currentPrice) / 주당순자산(bookValue)로 직접 계산
+    pbr = info.get('priceToBook')
+    if not pbr:
+        price = info.get('currentPrice', info.get('previousClose', 0))
+        book_value = info.get('bookValue', 0)
+        if price > 0 and book_value > 0:
+            pbr = price / book_value
+        else:
+            pbr = 0
+            
+    # 3. ROE (자기자본이익률) 추정
+    # returnOnEquity가 없으면, 주당순이익(EPS) / 주당순자산(bookValue)로 근사치 계산
+    roe = info.get('returnOnEquity')
+    if not roe:
+        eps = info.get('trailingEps', info.get('forwardEps', 0))
+        book_value = info.get('bookValue', 0)
+        if eps and book_value and book_value > 0:
+            roe = eps / book_value
+        else:
+            roe = 0
+            
+    # 4. 부채비율(Debt Ratio) 추정
+    # debtToEquity가 없으면 총부채(totalDebt)와 시가총액(marketCap)을 이용해 보수적인 추정치 적용
+    debt = info.get('debtToEquity')
+    if not debt:
+        total_debt = info.get('totalDebt', 0)
+        market_cap = info.get('marketCap', 0)
+        # 시총 대비 부채가 100%를 넘어가면 위험하다고 판단 (자본 대비 부채비율의 대체재)
+        if total_debt > 0 and market_cap > 0:
+            debt = (total_debt / market_cap) * 100 
+        else:
+            debt = 0 
+            
     return {
-        'PER': info.get('trailingPE', 0),
-        'PBR': info.get('priceToBook', 0),
-        'ROE': info.get('returnOnEquity', 0),
-        'Debt_Ratio': info.get('debtToEquity', 0)
+        'PER': per,
+        'PBR': pbr,
+        'ROE': roe,
+        'Debt_Ratio': debt
     }
 
 def get_supply_data(ticker, market_type):
