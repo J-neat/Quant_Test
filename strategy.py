@@ -8,12 +8,19 @@ def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).fillna(0)
     loss = (-delta.where(delta < 0, 0)).fillna(0)
-    avg_gain = gain.rolling(window=period, min_periods=1).mean()
-    avg_loss = loss.rolling(window=period, min_periods=1).mean()
+    
+    # Wilder's RSI (표준 지수이동평균 방식)
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
 def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_info=None, stock_name=""):
+    if df is None or len(df) < 20:
+        return 'HOLD', 0, ["데이터 부족"], df 
+        
+    df = df.copy() 
     df['RSI'] = calculate_rsi(df['Close'])
     df['SMA_20'] = df['Close'].rolling(window=20).mean()
     df['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean()
@@ -26,15 +33,21 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_i
     
     score = 0
     reasons = []
+    BUY_THRESHOLD = 55
     
-    is_etf = '레버리지' in stock_name or '인버스' in stock_name or 'KODEX' in stock_name or 'TIGER' in stock_name
+    etf_keywords = ['레버리지', '인버스', 'KODEX', 'TIGER', 'ETF', 'TRUST', 'FUND', 'PROSHARES', 'DIREXION']
+    is_etf = any(keyword in str(stock_name).upper() for keyword in etf_keywords)
 
     if is_etf:
-        # 💡 [해결] ETF 전용 전략: 20일선 돌파(50점)를 못 하면 무조건 탈락하도록 배점 조정!
+        #  하드 필터: 20일선 미만이면 무조건 탈락
+        if today_close <= today_sma_20:
+            reasons.append("추세 이탈(20일선 하회)")
+            # 🚨 기존: return 'HOLD', 0, reasons
+            # ✅ 수정: 마지막에 df 추가
+            return 'HOLD', 0, reasons, df 
+            
         p_sma, p_rsi, p_vol = 50, 25, 25
-        
-        if today_close > today_sma_20: 
-            score += p_sma; reasons.append("확실한 추세(20일선 위)")
+        score += p_sma; reasons.append("확실한 추세(20일선 위)")
         if not pd.isna(today_rsi) and today_rsi < 65: 
             score += p_rsi; reasons.append(f"추세 상승여력(RSI {today_rsi:.1f})")
         if today_volume > today_vol_sma_20 * 1.2: 
@@ -44,16 +57,19 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_i
         p_per, p_pbr, p_roe, p_debt = 20, 15, 20, 15
         p_rsi, p_sma, p_vol = 10, 10, 10
         
-        per = fundamentals.get('PER')
+        per = fundamentals.get('PER', 0)
         if per and 0 < per < 20: 
             score += p_per; reasons.append(f"PER 저평가({per:.1f})")
-        pbr = fundamentals.get('PBR')
+            
+        pbr = fundamentals.get('PBR', 0)
         if pbr and 0 < pbr < 2.0: 
             score += p_pbr; reasons.append(f"PBR 우수({pbr:.1f})")
-        roe = fundamentals.get('ROE')
+            
+        roe = fundamentals.get('ROE', 0)
         if roe and roe > 0.12: 
             score += p_roe; reasons.append(f"고수익성(ROE {roe*100:.1f}%)")
-        debt = fundamentals.get('Debt_Ratio')
+            
+        debt = fundamentals.get('Debt_Ratio', 999) 
         if debt and debt < 100: 
             score += p_debt; reasons.append(f"재무건전(부채 {debt:.1f}%)")
             
@@ -64,7 +80,7 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_i
         if today_volume > today_vol_sma_20 * 1.5: 
             score += p_vol; reasons.append("거래량 터짐")
             
-    else:
+    else: 
         p_rsi, p_sma, p_vol = 20, 20, 20
         p_foreign, p_inst = 20, 20 
 
@@ -75,25 +91,25 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_i
         if today_volume > today_vol_sma_20 * 1.2: 
             score += p_vol; reasons.append("거래량 증가")
 
-        if supply_info:
-            foreign_days = supply_info.get('foreign_buy_days', 0)
-            inst_days = supply_info.get('inst_buy_days', 0)
-            
-            if foreign_days >= 2: 
-                score += p_foreign; reasons.append(f"외국인 {foreign_days}일 연속 픽")
-            elif foreign_days == 1:
-                score += (p_foreign // 2); reasons.append("외국인 오늘 매수")
-                
-            if inst_days >= 2:
-                score += p_inst; reasons.append(f"기관 {inst_days}일 연속 픽")
-            elif inst_days == 1:
-                score += (p_inst // 2); reasons.append("기관 오늘 매수")
+        supply_info = supply_info or {}
+        foreign_days = supply_info.get('foreign_buy_days', 0)
+        inst_days = supply_info.get('inst_buy_days', 0)
         
-    BUY_THRESHOLD = 55
+        if foreign_days >= 2: 
+            score += p_foreign; reasons.append(f"외국인 {foreign_days}일 연속 픽")
+        elif foreign_days == 1:
+            score += (p_foreign // 2); reasons.append("외국인 오늘 매수")
+            
+        if inst_days >= 2:
+            score += p_inst; reasons.append(f"기관 {inst_days}일 연속 픽")
+        elif inst_days == 1:
+            score += (p_inst // 2); reasons.append("기관 오늘 매수")
+        
     signal = 'BUY' if score >= BUY_THRESHOLD else 'HOLD'
     
     tag = "[ETF]" if is_etf else f"[{market_type}]"
     if score >= BUY_THRESHOLD:
         reasons.append(f"종합 점수: {int(score)}점 {tag}")
     
-    return signal, int(score), reasons
+    #  [수정] 마지막에 가공된 df(RSI, 이동평균선 포함)를 함께 반환하도록 추가
+    return signal, int(score), reasons, df

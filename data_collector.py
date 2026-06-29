@@ -25,67 +25,56 @@ def get_fundamental_data(ticker):
     }
 
 def get_supply_data(ticker, market_type):
-    """네이버 금융에서 최근 외국인/기관 수급 동향을 가져오는 함수 (코스닥 전용)"""
     supply_info = {'foreign_buy_days': 0, 'inst_buy_days': 0}
     
-    if market_type == 'KOSDAQ':
+    # 💡 [수정] KOSDAQ뿐만 아니라 KOSPI 시장도 네이버 금융 수급 데이터를 가져오도록 추가
+    if market_type in ['KOSDAQ', 'KOSPI']:
         clean_ticker = ticker.replace('.KQ', '').replace('.KS', '')
         try:
             url = f"https://finance.naver.com/item/frgn.naver?code={clean_ticker}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers)
             res.encoding = 'euc-kr' 
             
-            # io.StringIO를 사용해 안전하게 HTML 표 읽기 (경고/에러 방지)
             tables = pd.read_html(io.StringIO(res.text))
             
             df = None
-            # 글자 매칭 대신, 열 개수가 7개 이상인 메인 수급표를 자동으로 찾음
             for t in tables:
                 if len(t.columns) >= 7:
                     df = t
                     break
                     
-            if df is None:
-                return supply_info
+            if df is None: return supply_info
                 
-            # 네이버 표 제목이 2줄(다중 인덱스)인 경우 1줄로 통합
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(0)
                 
-            # 결측치(빈 줄) 제거
             date_col = df.columns[0]
             df = df.dropna(subset=[date_col])
-            # 표 중간에 끼어있는 '날짜' 제목 행도 제거
             df = df[df[date_col] != '날짜']
-            
             recent_data = df.head(5) 
             
-            # 기관 연속 매수일 계산 (6번째 열)
-            inst_buy = 0
-            for val in recent_data.iloc[:, 5]:
-                val_str = str(val).replace(',', '').replace('+', '').strip()
-                try:
-                    if int(val_str) > 0: inst_buy += 1
-                    else: break
-                except:
-                    break
-                    
-            # 외국인 연속 매수일 계산 (7번째 열)
-            foreign_buy = 0
-            for val in recent_data.iloc[:, 6]:
-                val_str = str(val).replace(',', '').replace('+', '').strip()
-                try:
-                    if int(val_str) > 0: foreign_buy += 1
-                    else: break
-                except:
-                    break
-                    
-            supply_info['inst_buy_days'] = inst_buy
-            supply_info['foreign_buy_days'] = foreign_buy
+            inst_col_idx, foreign_col_idx = 5, 6
+            for i, col_name in enumerate(df.columns):
+                if '기관' in str(col_name): 
+                    inst_col_idx = i
+                elif '외국인' in str(col_name) and '비율' not in str(col_name) and '보유' not in str(col_name): 
+                    foreign_col_idx = i
+
+            def count_continuous_buy(series):
+                days = 0
+                for val in series:
+                    val_str = str(val).replace(',', '').replace('+', '').strip()
+                    try:
+                        if int(val_str) > 0: days += 1
+                        else: break
+                    except: break
+                return days
+
+            supply_info['inst_buy_days'] = count_continuous_buy(recent_data.iloc[:, inst_col_idx])
+            supply_info['foreign_buy_days'] = count_continuous_buy(recent_data.iloc[:, foreign_col_idx])
             
         except Exception as e:
-            # 화면 테러 방지를 위해 긴 HTML 대신 짧은 에러 이름만 출력
             print(f"  ⚠️ [{clean_ticker}] 수급 데이터 에러 ({type(e).__name__})")
             
     return supply_info
