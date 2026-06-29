@@ -69,6 +69,17 @@ def get_kosdaq_top_100():
     kosdaq_dict.update(etfs)
     return kosdaq_dict
 
+def check_market_regime(index_ticker):
+    """주요 지수의 200일선 돌파 여부를 확인하여 마켓 타이밍(Bull/Bear)을 반환"""
+    try:
+        index_df = get_stock_data(index_ticker, period='1y')
+        index_df['SMA_200'] = index_df['Close'].rolling(window=200).mean()
+        last_close = index_df['Close'].iloc[-1]
+        last_sma_200 = index_df['SMA_200'].iloc[-1]
+        return last_close > last_sma_200
+    except:
+        return True
+
 if __name__ == "__main__":
     print("=== 🚀 멀티팩터 퀀트 스크리닝 & 슬랙 알림 시작 ===\n")
     
@@ -76,41 +87,39 @@ if __name__ == "__main__":
     clear_slack_channel(SLACK_TOKEN, SLACK_CHANNEL)
 
     us_stocks = get_nasdaq_100()
-    kr_kospi_stocks = get_kospi_top_100() # 코스피 데이터 로드
+    kr_kospi_stocks = get_kospi_top_100() 
     kr_kosdaq_stocks = get_kosdaq_top_100()
     
-    # 💡 [수정] 스크리닝 루프에 KOSPI 100 그룹을 추가
+    # 시장 지수 세팅 (미국: QQQ, 한국: KOSPI)
     screening_groups = [
-        ("🇺🇸 (NASDAQ 100)", us_stocks), 
-        ("🇰🇷 (KOSPI 100)", kr_kospi_stocks), 
-        ("🇰🇷 (KOSDAQ 100+ETF)", kr_kosdaq_stocks)
+        ("🇺🇸 (NASDAQ 100)", us_stocks, 'QQQ', 'NASDAQ'), 
+        ("🇰🇷 (KOSPI 100)", kr_kospi_stocks, '^KS11', 'KOSPI'), 
+        ("🇰🇷 (KOSDAQ 100+ETF)", kr_kosdaq_stocks, '^KS11', 'KOSDAQ') 
     ]
     
-    for flag, stock_dict in screening_groups:
+    for flag, stock_dict, index_ticker, market_type in screening_groups:
         print(f"\n======================================")
         print(f"▶️ {flag} 분석 중...")
-        print(f"======================================")
         
-        # 💡 [수정] market_type을 문자열(flag)에 맞게 3가지로 분기
-        if "NASDAQ" in flag:
-            market_type = 'NASDAQ'
-        elif "KOSPI" in flag:
-            market_type = 'KOSPI'
-        else:
-            market_type = 'KOSDAQ'
+        # 💡 [핵심] 스크리닝 전 거시경제 상황 선체크
+        is_bull_market = check_market_regime(index_ticker)
+        if not is_bull_market:
+            print(f"⚠️ [마켓 경고] {index_ticker} 지수가 200일선 아래에 있습니다. (보수적 접근 필요)")
+            
+        print(f"======================================")
         
         for ticker, name in stock_dict.items():
             try:
                 raw_data = get_stock_data(ticker, period='6mo')
-                if raw_data is None or len(raw_data) < 20: 
-                    continue
+                if raw_data is None or len(raw_data) < 20: continue
 
                 fundamentals = get_fundamental_data(ticker)
                 supply_info = get_supply_data(ticker, market_type)
                 
-                # 💡 [수정] processed_data 변수를 추가로 받아옵니다.
+                # 💡 [핵심] is_bull_market 인자 전달
                 signal, score, reasons, processed_data = apply_multi_factor_strategy(
-                    raw_data, fundamentals, market_type=market_type, supply_info=supply_info, stock_name=name
+                    raw_data, fundamentals, market_type=market_type, 
+                    supply_info=supply_info, stock_name=name, is_bull_market=is_bull_market
                 )
                 
                 clean_ticker = ticker.replace('.KS', '').replace('.KQ', '')
