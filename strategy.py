@@ -51,7 +51,7 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_i
     reasons = []
     BUY_THRESHOLD = 55
     
-    etf_keywords = ['레버리지', '인버스', 'KODEX', 'TIGER', 'ETF', 'TRUST', 'FUND', 'PROSHARES', 'DIREXION']
+    etf_keywords = ['레버리지', '인버스', 'KODEX', 'TIGER', 'ETF', 'TRUST', 'FUND', 'PROSHARES', 'DIREXION', 'ACE']
     is_etf = any(keyword in str(stock_name).upper() for keyword in etf_keywords)
 
     if is_etf:
