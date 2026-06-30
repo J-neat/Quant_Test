@@ -80,6 +80,19 @@ def check_market_regime(index_ticker):
     except:
         return True
 
+# 슬랙 용어 사전 안내 메시지 전송 함수 추가
+def send_term_dictionary(token, channel_id):
+    dictionary_msg = (
+        "📚 *[퀀트 시그널 용어 사전]* 📚\n\n"
+        "• *RSI (상대강도지수):* 주가의 과열/침체를 나타냅니다. 30 이하면 과매도(바닥권), 70 이상이면 과매수(고점권)로 해석합니다.\n"
+        "• *OBV:* 거래량 누적 지표입니다. 주가가 하락하는데 OBV가 버틴다면 '스마트 머니'의 매집을 의심할 수 있습니다.\n"
+        "• *POC (Point of Control):* 최근 6개월간 가장 많은 거래가 이루어진 '최대 매물대' 가격입니다. 강력한 지지선/저항선 역할을 합니다.\n"
+        "• *PER / PBR:* 기업의 수익성과 자산 대비 현재 주가의 고평가/저평가를 나타내는 기본적 분석 지표입니다.\n"
+        "------------------------------------------------------------\n"
+        "👇 *오늘의 추천 종목 시그널이 곧 도착합니다.* 👇"
+    )
+    send_quant_signal(token, channel_id, dictionary_msg)
+
 if __name__ == "__main__":
     print("=== 🚀 멀티팩터 퀀트 스크리닝 & 슬랙 알림 시작 ===\n")
     
