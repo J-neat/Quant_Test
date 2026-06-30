@@ -14,6 +14,7 @@ from data_collector import get_stock_data, get_fundamental_data, get_supply_data
 from strategy import apply_multi_factor_strategy
 from visualizer import plot_stock_chart
 from slack_notifier import send_quant_signal, clear_slack_channel  
+from db_manager import save_signal_to_db
 
 load_dotenv()  
 
@@ -110,6 +111,8 @@ if __name__ == "__main__":
         ("🇰🇷 (KOSDAQ 100+ETF)", kr_kosdaq_stocks, '^KS11', 'KOSDAQ') 
     ]
     
+    term_dict_sent = False
+
     for flag, stock_dict, index_ticker, market_type in screening_groups:
         print(f"\n======================================")
         print(f"▶️ {flag} 분석 중...")
@@ -147,6 +150,10 @@ if __name__ == "__main__":
                     # 💡 [수정] raw_data 대신 지표가 포함된 processed_data를 넘겨줍니다.
                     plot_stock_chart(processed_data, display_name, score, reasons, fundamentals)
                     
+                    if not term_dict_sent:
+                        send_term_dictionary(SLACK_TOKEN, SLACK_CHANNEL)
+                        term_dict_sent = True
+
                     slack_message = (
                         f"🚨 *[매수 추천 봇]*\n"
                         f"⏰ *시간:* `{now}`\n\n"
@@ -158,6 +165,20 @@ if __name__ == "__main__":
                     
                     chart_file_path = f"charts/{display_name}_chart.png"
                     send_quant_signal(SLACK_TOKEN, SLACK_CHANNEL, slack_message, chart_file_path)
+                    
+                    try:
+                        save_signal_to_db(
+                            ticker=ticker, 
+                            stock_name=name, 
+                            price=current_price, 
+                            score=score, 
+                            reasons_list=reasons,
+                            market_type=market_type
+                        )
+                        print(f"      🗄️ 클라우드 DB 적재 성공: {display_name}")
+                    except Exception as db_err:
+                        print(f"      ❌ 클라우드 DB 적재 실패 로그: {db_err}")
+
                 else:
                     if score > 0:
                         print(f"  ⏳ [관망] {display_name} (점수: {score}/100)")
