@@ -133,7 +133,7 @@ if __name__ == "__main__":
                 supply_info = get_supply_data(ticker, market_type)
                 
                 # 💡 [핵심] is_bull_market 인자 전달
-                signal, score, reasons, processed_data = apply_multi_factor_strategy(
+                signal, score, reasons, processed_data, price_targets = apply_multi_factor_strategy(
                     raw_data, fundamentals, market_type=market_type, 
                     supply_info=supply_info, stock_name=name, is_bull_market=is_bull_market
                 )
@@ -147,9 +147,11 @@ if __name__ == "__main__":
 
                     print(f"  ✅ [추천] {display_name} (점수: {score}/100)")
                     
-                    # 💡 [수정] raw_data 대신 지표가 포함된 processed_data를 넘겨줍니다.
                     plot_stock_chart(processed_data, display_name, score, reasons, fundamentals)
                     
+                    tp_price = price_targets['TP']
+                    sl_price = price_targets['SL']
+
                     if not term_dict_sent:
                         send_term_dictionary(SLACK_TOKEN, SLACK_CHANNEL)
                         term_dict_sent = True
@@ -159,6 +161,8 @@ if __name__ == "__main__":
                         f"⏰ *시간:* `{now}`\n\n"
                         f"📌 *종목:* {display_name}\n"
                         f"💰 *현재가:* `{current_price:,.2f}`\n"
+                        f"🎯 *목표 익절가:* `{tp_price:,.0f}원`\n"
+                        f"🛑 *절대 손절가:* `{sl_price:,.0f}원`\n"
                         f"📊 *스코어:* `{score} / 100 점`\n"
                         f"💡 *사유:* {', '.join(reasons)}"
                     )
@@ -182,7 +186,9 @@ if __name__ == "__main__":
                 else:
                     if score > 0:
                         print(f"  ⏳ [관망] {display_name} (점수: {score}/100)")
-                        
+                    elif "데이터 부족" in reasons:
+                        # 데이터가 부족해서 걸러진 경우 출력 (원치 않으면 삭제 가능)
+                        print(f"  ⚠️ [데이터 부족 패스] {display_name}")
             except Exception as e:
                 print(f"  ⚠️ [{ticker}] 처리 중 에러 발생: {e}")
                 

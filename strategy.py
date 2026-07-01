@@ -23,9 +23,10 @@ def get_poc_price(df, bins=20):
         return df['Close'].mean()
 
 # 💡 [매개변수 추가] is_bull_market (현재 시장이 200일선 위에 있는지 여부)
-def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_info=None, stock_name="", is_bull_market=True):
+def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=None, stock_name="", is_bull_market=True):
     if df is None or len(df) < 20:
-        return 'HOLD', 0, ["데이터 부족"], df 
+        # 💡 [수정] 빈 목표가/손절가 딕셔너리 {} 를 추가하여 5개를 리턴합니다.
+        return 'HOLD', 0, ["데이터 부족"], df, {}
         
     df = df.copy() 
     df['RSI'] = calculate_rsi(df['Close'])
@@ -96,5 +97,27 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='NASDAQ', supply_i
         
     signal = 'BUY' if score >= BUY_THRESHOLD else 'HOLD'
     if score >= BUY_THRESHOLD: reasons.append(f"종합: {int(score)}점 [{market_type}]")
+
+    target_price = 0
+    stop_loss = 0
     
-    return signal, int(score), reasons, df
+    if market_type == 'KR':
+        # 국장: 20일선 회복 또는 최대 매물대까지의 반등을 목표로 함
+        target_price = max(today_sma_20, poc_price)
+        if target_price <= today_close: # 이미 목표가를 넘었다면 +10%로 상향
+            target_price = today_close * 1.10
+        # 손절가는 백테스트에서 검증한 -15%
+        stop_loss = today_close * 0.85
+        
+    else: # US (미장) 또는 ETF
+        # 미장: 추세 추종이므로 목표가는 여유 있게 +20%
+        target_price = today_close * 1.20
+        # 손절가는 추세가 꺾이는 20일선(또는 최대 -15% 중 높은 가격)
+        stop_loss = max(today_sma_20, today_close * 0.85)
+        
+    price_targets = {
+        'TP': int(target_price),
+        'SL': int(stop_loss)
+    }
+    
+    return signal, int(score), reasons, df, price_targets
