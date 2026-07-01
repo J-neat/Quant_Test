@@ -6,7 +6,7 @@
 
 # 1. 프로젝트 개요
 
-이 프로젝트는 **나스닥 및 코스닥 종목의 기술적/재무적 지표를 분석**하고, **Slack으로 매일 분석 리포트와 차트를 자동 전송**하는 퀀트 투자 도구입니다.
+이 프로젝트는 **나스닥 및 코스피,코스닥 종목의 기술적/재무적 지표를 분석**하고, **Slack으로 매일 분석 리포트와 차트를 자동 전송**하는 퀀트 투자 도구입니다.
 
 ---
 
@@ -56,6 +56,8 @@ pip install -r requirements.txt
 ```env
 SLACK_TOKEN=xoxb-발급받은-토큰-입력
 SLACK_CHANNEL=채널ID-입력
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=eyJhb...
 ```
 
 ---
