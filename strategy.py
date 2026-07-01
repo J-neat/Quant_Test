@@ -25,7 +25,6 @@ def get_poc_price(df, bins=20):
 # 💡 [매개변수 추가] is_bull_market (현재 시장이 200일선 위에 있는지 여부)
 def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=None, stock_name="", is_bull_market=True):
     if df is None or len(df) < 20:
-        # 💡 [수정] 빈 목표가/손절가 딕셔너리 {} 를 추가하여 5개를 리턴합니다.
         return 'HOLD', 0, ["데이터 부족"], df, {}
         
     df = df.copy() 
