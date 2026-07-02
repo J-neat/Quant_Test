@@ -196,12 +196,11 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     
     if score >= BUY_THRESHOLD: 
         if today_weekday in [3, 4]:
-            reasons.insert(0, f"🌟 [주말 돌파 VIP] 하락 압력을 이겨낸 찐텐 종목! (총 {score:.1f}점)")
+            reasons.insert(0, f"\n🌟 [목/금 리스크 돌파 VIP] 하락 압력을 이겨낸 찐텐 종목! (총 {score:.1f}점)\n")
         else:
             reasons.append(f"종합: {score:.1f}점 [{market_type}]")
             
-        # 💡 [핵심] 스케줄러 간격의 한계를 보완하기 위한 강력한 경고 문구 추가
-        reasons.append("⚠️ [주의] 매수 직후 증권사 앱에서 '자동 감시 주문(예약 매도)'으로 아래 익절/손절가를 반드시 세팅하세요!")
+        reasons.append("\n⚠️ [주의] 매수 직후 증권사 앱에서 '자동 감시 주문(예약 매도)'으로 아래 익절/손절가를 반드시 세팅하세요!")
 
     target_price = 0
     stop_loss = 0
