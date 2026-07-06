@@ -21,13 +21,12 @@ def run_quant_bot():
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚨 봇 실행 중 오류 발생: {e}")
 
 # 하루 4번 스크리닝을 위한 실행 시간대 배열
-run_times = ["08:50", "09:20", "12:00", "15:20", "16:00"]
+run_times = ["08:50", "09:20", "10:00", "11:00", "12:00", "13:00", "14:00", "15:20", "16:00", "17:00"]
 
 days = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 
 
 
-# 반복문을 통해 평일 x 4개 시간대 스케줄을 한 번에 등록
 for day in days:
     for t in run_times:
         getattr(schedule.every(), day).at(t).do(run_quant_bot)
@@ -35,9 +34,7 @@ for day in days:
 print("⏰ 로컬 스케줄러 가동 시작... (종료하려면 Ctrl+C)")
 print(f"📌 세팅된 실행 시간(평일): {', '.join(run_times)}")
 
-# 메인 루프 (1분마다 조건 체크 후 대기)
 try:
-    # 메인 루프 (1분마다 조건 체크 후 대기)
     while True:
         schedule.run_pending()
         time.sleep(60)
