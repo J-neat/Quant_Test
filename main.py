@@ -14,7 +14,7 @@ from data_collector import get_stock_data, get_fundamental_data, get_supply_data
 from strategy import apply_multi_factor_strategy
 from visualizer import plot_stock_chart
 from slack_notifier import send_quant_signal, clear_slack_channel  
-from db_manager import save_signal_to_db, get_recent_buy_tickers # 💡 추적 함수 임포트 추가
+from db_manager import save_signal_to_db, get_recent_buy_signals 
 
 load_dotenv()  
 
@@ -92,20 +92,22 @@ def send_term_dictionary(token, channel_id):
 # 💡 [핵심] 기존 추천 종목 A/S 리포트 생성 함수
 def send_position_tracking_report(token, channel_id):
     print("🔍 과거 추천 종목 A/S 리포트 생성 중...")
-    recent_tickers = get_recent_buy_tickers()
-    
-    if not recent_tickers:
+    recent_signals = get_recent_buy_signals() 
+    if not recent_signals:
         send_quant_signal(token, channel_id, "🔍 *[기존 추천 종목 A/S 리포트]*\n최근 3일 내 추천된 종목이 없습니다.\n------------------------------------------------------------")
         return
-
     tracking_msg = "🔍 *[기존 추천 종목 A/S 리포트]*\n\n"
     
-    for ticker in recent_tickers:
+    for signal_data in recent_signals:
+        ticker = signal_data['ticker']
+        stock_name = signal_data['stock_name']
+        orig_price = signal_data['price'] # 과거 DB에 저장했던 매수가
+        market_type = signal_data['market_type']
+        
+        clean_ticker = ticker.replace('.KS', '').replace('.KQ', '')
+        display_name = f"{stock_name}({clean_ticker})"
+        
         try:
-            market_type = 'NASDAQ'
-            if ticker.endswith('.KS'): market_type = 'KOSPI'
-            elif ticker.endswith('.KQ'): market_type = 'KOSDAQ'
-            
             df = get_stock_data(ticker, period='6mo')
             if df is None or len(df) < 20: continue
             
@@ -115,24 +117,27 @@ def send_position_tracking_report(token, channel_id):
             index_ticker = '^KS11' if market_type in ['KOSPI', 'KOSDAQ'] else 'QQQ'
             is_bull = check_market_regime(index_ticker)
 
-            signal, score, _, _, targets = apply_multi_factor_strategy(
+            signal, current_score, _, _, targets = apply_multi_factor_strategy(
                 df, fundamentals, market_type, supply_info, ticker, is_bull
             )
             
             current_price = df['Close'].iloc[-1]
             sl_price = targets['SL']
             
+            # 💡 [추가] 과거 추천가 대비 현재 수익률 계산
+            return_pct = ((current_price - orig_price) / orig_price) * 100
+            
             if current_price <= sl_price:
-                tracking_msg += f"🚨 `{ticker}` : *손절가({sl_price:,.0f}원) 이탈* - 즉시 매도 권고!\n"
+                tracking_msg += f"🚨 `{display_name}` : *손절가 이탈* (현재 수익률 {return_pct:.1f}%) - 즉시 매도 권고!\n"
             elif signal == 'BUY':
-                tracking_msg += f"✅ `{ticker}` : 상승 추세 유지 (현재 {score}점) - HOLD\n"
+                tracking_msg += f"✅ `{display_name}` : 상승 추세 유지 (현재 {current_score}점 / 수익률 {return_pct:.1f}%) - HOLD\n"
             else:
-                tracking_msg += f"⚠️ `{ticker}` : 상승 모멘텀 둔화 (현재 {score}점) - 매도 준비\n"
+                tracking_msg += f"⚠️ `{display_name}` : 상승 모멘텀 둔화 (현재 {current_score}점 / 수익률 {return_pct:.1f}%) - 매도 준비\n"
                 
         except Exception as e:
-            tracking_msg += f"❓ `{ticker}` : 상태 확인 불가\n"
+            tracking_msg += f"❓ `{display_name}` : 상태 확인 불가\n"
             
-    tracking_msg += "------------------------------------------------------------\n👇 *오늘의 신규 추천 종목 시그널이 곧 도착합니다.* 👇"
+    tracking_msg += "\n------------------------------------------------------------\n👇 *오늘의 신규 추천 종목 시그널이 곧 도착합니다.* 👇"
     send_quant_signal(token, channel_id, tracking_msg)
 
 
