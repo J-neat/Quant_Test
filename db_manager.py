@@ -32,3 +32,30 @@ def save_signal_to_db(ticker, stock_name, price, score, reasons_list, market_typ
     except Exception as e:
         print(f"      🚨 [DB 에러] 데이터 적재 실패 원인: {e}")
         raise e
+    
+def get_recent_buy_tickers():
+    """
+    최근 3일 이내에 'BUY' 시그널이 발생했던 종목 티커(Ticker) 리스트를 Supabase에서 불러옵니다.
+    """
+    try:
+        from supabase import create_client
+        import os
+        from datetime import datetime, timedelta
+        
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY")
+        supabase = create_client(url, key)
+        
+        three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+        
+        response = supabase.table("quant_signals") \
+            .select("ticker") \
+            .eq("signal", "BUY") \
+            .gte("created_at", three_days_ago) \
+            .execute()
+            
+        tickers = list(set([item['ticker'] for item in response.data]))
+        return tickers
+    except Exception as e:
+        print(f"DB 조회 중 에러 발생: {e}")
+        return []
