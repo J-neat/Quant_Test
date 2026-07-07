@@ -1,6 +1,6 @@
-# 업데이트날짜: 2026.07.02
+# 업데이트날짜: 2026.07.07
 # 작성자: j-neat
-# 투자 전략 및 시그널 전담 모듈 (유동성 필터 + 미장 모멘텀 + 직관적 비례 스코어링 적용)
+# 투자 전략 및 시그널 전담 모듈 (RSI 모멘텀 보정 및 매물대 기간 고정, 낙폭과대 예외 추가)
 
 import pandas as pd
 import numpy as np
@@ -14,9 +14,11 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-def get_poc_price(df, bins=20):
+# 💡 [수정 2] 매물대 계산 시 최근 120일(약 6개월) 고정 윈도우 적용
+def get_poc_price(df, bins=20, window=120):
     try:
-        hist, bin_edges = np.histogram(df['Close'], bins=bins, weights=df['Volume'])
+        recent_df = df.tail(window)
+        hist, bin_edges = np.histogram(recent_df['Close'], bins=bins, weights=recent_df['Volume'])
         max_bin_idx = np.argmax(hist)
         return (bin_edges[max_bin_idx] + bin_edges[max_bin_idx + 1]) / 2
     except:
@@ -44,19 +46,16 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     df['BB_Upper'] = df['SMA_20'] + (2 * df['Close'].rolling(window=20).std())
     df['ATR'] = calculate_atr(df)
 
-    # 💡 1. 거래대금 계산 (잡주 필터링용)
     df['Turnover'] = df['Close'] * df['Volume']
     avg_turnover_5d = df['Turnover'].rolling(window=5).mean().iloc[-1]
 
-    # 거시경제 하락장 차단
     if not is_bull_market:
         return 'HOLD', 0, ["🚫 거시경제 하락장 (지수 200일선 하회)으로 인한 매수 차단"], df, {}
 
-    # 💡 2. 유동성 하드 필터 (잡주/소외주 원천 차단)
     if market_type == 'NASDAQ':
-        min_turnover = 10_000_000 # 미장: 5일 평균 거래대금 1천만 달러 이상
+        min_turnover = 10_000_000 
     else:
-        min_turnover = 10_000_000_000 # 국장: 5일 평균 거래대금 100억 원 이상
+        min_turnover = 10_000_000_000 
         
     if avg_turnover_5d < min_turnover:
         return 'HOLD', 0, ["🚫 유동성 부족 (소외주/잡주 리스크 필터링)"], df, {}
@@ -73,8 +72,9 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     today_atr = df['ATR'].fillna(today_close * 0.03).iloc[-1]
     bb_upper = df['BB_Upper'].fillna(today_close).iloc[-1]
     
-    # 52주 고가 (미장 모멘텀 팩터용)
     high_52w = df['High'].rolling(window=min(252, len(df))).max().iloc[-1]
+    
+    gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
     
     today_weekday = df.index[-1].weekday()
     BUY_THRESHOLD = 60.0 if today_weekday in [3, 4] else 50.0
@@ -90,40 +90,42 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     # ==========================================
     
     if is_etf:
-        if today_close <= today_sma_20:
-            return 'HOLD', 0, ["추세 이탈(20일선 하회)"], df, {}
+        # 💡 [수정 3] 20일선 아래라도, -5% 이상 벌어진 과대낙폭 상태면 예외적으로 통과 허용
+        if today_close <= today_sma_20 and gap_percent > -5.0:
+            return 'HOLD', 0, ["추세 이탈(20일선 하회 및 애매한 위치)"], df, {}
             
-        # 1. RSI (목표: 30 이상 돌파 시 만점 20점)
-        rsi_score = min(20.0, (today_rsi / 30.0) * 20.0) if not pd.isna(today_rsi) else 0.0
+        # 💡 [수정 1] RSI 모멘텀 타겟 상향 (60 이상 시 만점)
+        rsi_score = min(20.0, (today_rsi / 60.0) * 20.0) if not pd.isna(today_rsi) else 0.0
         score += rsi_score
         reasons.append(f"RSI({rsi_score:.1f}점)")
 
-        # 2. 거래량 (목표: 평균대비 2배 터지면 만점 20점)
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
         vol_score = min(20.0, (vol_ratio / 2.0) * 20.0)
         score += vol_score
         reasons.append(f"거래량({vol_score:.1f}점)")
 
-        # 3. 20일선 이격도 (목표: 20일선 대비 3% 이상 상승 시 만점 20점)
-        gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
-        sma_score = min(20.0, (gap_percent / 3.0) * 20.0) if gap_percent > 0 else 0.0
+        # 💡 [수정 3 연계] 낙폭 과대 시 20일선 이격도에 프리미엄 만점 부여
+        if 0 < gap_percent <= 3:
+            sma_score = min(20.0, (gap_percent / 3.0) * 20.0)
+        elif gap_percent <= -5.0:
+            sma_score = 20.0 # 낙폭과대 프리미엄
+        else:
+            sma_score = 0.0
+            
         score += sma_score
         reasons.append(f"20일선 이격({sma_score:.1f}점)")
 
-        # 4. OBV 상승 (목표: OBV가 평균을 상회하는 비율에 따라 최대 20점)
         obv_ratio = today_obv / today_obv_sma if today_obv_sma > 0 else 1.0
         obv_score = min(20.0, (obv_ratio / 1.1) * 20.0) if obv_ratio > 1.0 else 0.0
         score += obv_score
         reasons.append(f"OBV({obv_score:.1f}점)")
 
-        # 5. 매물대 돌파 (목표: 매물대 대비 3% 이상 돌파 시 만점 20점)
         poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
         poc_score = min(20.0, (poc_gap / 3.0) * 20.0) if poc_gap > 0 else 0.0
         score += poc_score
         reasons.append(f"매물대 돌파({poc_score:.1f}점)")
 
     elif market_type == 'NASDAQ':
-        # 💡 미장 펀더멘털 비중 축소 (총 20점)
         per = fundamentals.get('PER', 0)
         per_score = 10.0 if 0 < per < 20 else 0.0
         score += per_score
@@ -134,27 +136,21 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         
         reasons.append(f"재무({per_score+roe_score:.1f}점)")
             
-        # 💡 미장 기술적 모멘텀 강화 (총 80점)
-        # 1. 52주 신고가 근접도 (목표: 52주 고가 대비 95% 이상 도달 시 만점 20점)
         high_gap = today_close / high_52w if high_52w > 0 else 0.0
         high_score = min(20.0, (high_gap / 0.95) * 20.0)
         score += high_score
         
-        # 2. RSI (목표 50 이상 도달 시 만점 15점 - 추세장)
-        rsi_score = min(15.0, (today_rsi / 50.0) * 15.0) if not pd.isna(today_rsi) else 0.0
+        # 💡 [수정 1] 미장 RSI 모멘텀 타겟 (60 이상 시 만점)
+        rsi_score = min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
         score += rsi_score
         
-        # 3. 거래량 폭발 (목표 2배 달성 시 15점)
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
         vol_score = min(15.0, (vol_ratio / 2.0) * 15.0)
         score += vol_score
         
-        # 4. 20일선 추세 (목표 3% 달성 시 15점)
-        gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
         sma_score = min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
         score += sma_score
         
-        # 5. 매물대 돌파 (목표 3% 달성 시 15점)
         poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
         poc_score = min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
         score += poc_score
@@ -162,10 +158,9 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         reasons.append(f"모멘텀({high_score+rsi_score+vol_score+sma_score+poc_score:.1f}점)")
             
     else: 
-        # 국장 로직 (총 100점 비례식 분배)
-        rsi_score = min(15.0, (today_rsi / 30.0) * 15.0) if not pd.isna(today_rsi) else 0.0
+        # 💡 [수정 1] 국장 RSI 모멘텀 타겟 (60 이상 시 만점)
+        rsi_score = min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
         
-        gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
         sma_score = min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
         
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
@@ -181,7 +176,6 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         foreign_days = supply_info.get('foreign_buy_days', 0)
         inst_days = supply_info.get('inst_buy_days', 0)
         
-        # 수급 점수 (목표: 3일 연속 매수 시 만점 20점)
         foreign_score = min(20.0, (foreign_days / 3.0) * 20.0)
         inst_score = min(20.0, (inst_days / 3.0) * 20.0)
         score += (foreign_score + inst_score)
@@ -196,7 +190,7 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     
     if score >= BUY_THRESHOLD: 
         if today_weekday in [3, 4]:
-            reasons.insert(0, f"\n🌟 [목/금 리스크 돌파 VIP] 하락 압력을 이겨낸 찐텐 종목! (총 {score:.1f}점)\n")
+            reasons.insert(0, f"\n🌟 [주말 돌파 VIP] 하락 압력을 이겨낸 찐텐 종목! (총 {score:.1f}점)\n")
         else:
             reasons.append(f"종합: {score:.1f}점 [{market_type}]")
             
