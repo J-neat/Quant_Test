@@ -1,9 +1,54 @@
+# strategy.py
 # 업데이트날짜: 2026.07.07
 # 작성자: j-neat
-# 투자 전략 및 시그널 전담 모듈 (승률 극대화용 단기 익절/스나이퍼 버전)
+# 투자 전략 및 시그널 전담 모듈 (이벤트 드리븐 & 선반영 차단 버전)
 
 import pandas as pd
 import numpy as np
+import os
+from supabase import create_client
+
+def check_recent_events(ticker, df, today_close):
+    try:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY")
+        supabase = create_client(url, key)
+        
+        response = supabase.table("dart_disclosures").select("event_type, report_title, rcept_dt").eq("ticker", ticker).execute()
+        
+        event_score = 0
+        event_msgs = []
+        
+        for item in response.data:
+            event_type = item['event_type']
+            title = item['report_title']
+            rcept_dt = f"{item['rcept_dt'][:4]}-{item['rcept_dt'][4:6]}-{item['rcept_dt'][6:]}"
+            
+            try:
+                base_price = df.loc[:rcept_dt]['Close'].iloc[-1]
+                price_change_pct = ((today_close - base_price) / base_price) * 100
+            except:
+                base_price = today_close
+                price_change_pct = 0.0
+
+            if event_type == 'GOOD':
+                if price_change_pct >= 5.0:
+                    event_msgs.append(f"⚠️ 호재 선반영 차단: {title[:15]}... (이미 {price_change_pct:.1f}% 상승)")
+                else:
+                    event_score += 15.0
+                    event_msgs.append(f"🎉 호재공시(+15): {title[:15]}... (반영률 {price_change_pct:.1f}%)")
+                    
+            elif event_type == 'BAD':
+                if price_change_pct <= -10.0:
+                    event_score -= 15.0
+                    event_msgs.append(f"⚠️ 악재 과매도: {title[:15]}... (이미 {price_change_pct:.1f}% 하락, -15점)")
+                else:
+                    event_score -= 30.0
+                    event_msgs.append(f"🚨 악재공시(-30): {title[:15]}... (반영률 {price_change_pct:.1f}%)")
+                
+        return event_score, event_msgs
+    except:
+        return 0, []
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -31,7 +76,7 @@ def calculate_atr(df, period=14):
     true_range = np.max(ranges, axis=1)
     return true_range.rolling(window=period).mean()
 
-def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=None, stock_name="", is_bull_market=True):
+def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=None, stock_name="", is_bull_market=True, ticker=""):
     if df is None or len(df) < 20:
         return 'HOLD', 0, ["데이터 부족"], df, {}
         
@@ -57,7 +102,7 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         min_turnover = 10_000_000_000 
         
     if avg_turnover_5d < min_turnover:
-        return 'HOLD', 0, ["🚫 유동성 부족 (소외주/잡주 리스크 필터링)"], df, {}
+        return 'HOLD', 0, ["🚫 유동성 부족"], df, {}
 
     today_rsi = df['RSI'].iloc[-1]
     today_close = df['Close'].iloc[-1]
@@ -85,122 +130,95 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
 
     if is_etf:
         if today_close <= today_sma_20 and gap_percent > -5.0:
-            return 'HOLD', 0, ["추세 이탈(20일선 하회 및 애매한 위치)"], df, {}
+            return 'HOLD', 0, ["추세 이탈"], df, {}
             
         rsi_score = min(20.0, (today_rsi / 60.0) * 20.0) if not pd.isna(today_rsi) else 0.0
         score += rsi_score
-        reasons.append(f"RSI({rsi_score:.1f}점)")
-
+        
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
         vol_score = min(20.0, (vol_ratio / 2.0) * 20.0)
         score += vol_score
-        reasons.append(f"거래량({vol_score:.1f}점)")
-
+        
         if 0 < gap_percent <= 3:
             sma_score = min(20.0, (gap_percent / 3.0) * 20.0)
         elif gap_percent <= -5.0:
             sma_score = 20.0 
         else:
             sma_score = 0.0
-            
         score += sma_score
-        reasons.append(f"20일선 이격({sma_score:.1f}점)")
-
+        
         obv_ratio = today_obv / today_obv_sma if today_obv_sma > 0 else 1.0
         obv_score = min(20.0, (obv_ratio / 1.1) * 20.0) if obv_ratio > 1.0 else 0.0
         score += obv_score
-        reasons.append(f"OBV({obv_score:.1f}점)")
-
+        
         poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
         poc_score = min(20.0, (poc_gap / 3.0) * 20.0) if poc_gap > 0 else 0.0
         score += poc_score
-        reasons.append(f"매물대 돌파({poc_score:.1f}점)")
+        
+        reasons.append(f"기술점수({score:.1f})")
 
     elif market_type == 'NASDAQ':
         per = fundamentals.get('PER', 0)
-        per_score = 10.0 if 0 < per < 20 else 0.0
-        score += per_score
-        
+        score += 10.0 if 0 < per < 20 else 0.0
         roe = fundamentals.get('ROE', 0)
-        roe_score = 10.0 if roe >= 0.12 else 0.0
-        score += roe_score
+        score += 10.0 if roe >= 0.12 else 0.0
         
-        reasons.append(f"재무({per_score+roe_score:.1f}점)")
-            
         high_gap = today_close / high_52w if high_52w > 0 else 0.0
-        high_score = min(20.0, (high_gap / 0.95) * 20.0)
-        score += high_score
-        
-        rsi_score = min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
-        score += rsi_score
-        
+        score += min(20.0, (high_gap / 0.95) * 20.0)
+        score += min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
-        vol_score = min(15.0, (vol_ratio / 2.0) * 15.0)
-        score += vol_score
-        
-        sma_score = min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
-        score += sma_score
-        
+        score += min(15.0, (vol_ratio / 2.0) * 15.0)
+        score += min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
         poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
-        poc_score = min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
-        score += poc_score
+        score += min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
         
-        reasons.append(f"모멘텀({high_score+rsi_score+vol_score+sma_score+poc_score:.1f}점)")
+        reasons.append(f"총점({score:.1f}점)")
             
     else: 
-        rsi_score = min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
-        sma_score = min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
-        
+        score += min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
+        score += min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
-        vol_score = min(15.0, (vol_ratio / 2.0) * 15.0)
-        
+        score += min(15.0, (vol_ratio / 2.0) * 15.0)
         poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
-        poc_score = min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
+        score += min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
         
-        score += (rsi_score + sma_score + vol_score + poc_score)
-        reasons.append(f"기술({rsi_score+sma_score+vol_score+poc_score:.1f}점)")
-
         supply_info = supply_info or {}
         foreign_days = supply_info.get('foreign_buy_days', 0)
         inst_days = supply_info.get('inst_buy_days', 0)
+        score += min(20.0, (foreign_days / 3.0) * 20.0)
+        score += min(20.0, (inst_days / 3.0) * 20.0)
         
-        foreign_score = min(20.0, (foreign_days / 3.0) * 20.0)
-        inst_score = min(20.0, (inst_days / 3.0) * 20.0)
-        score += (foreign_score + inst_score)
-        
-        if foreign_days > 0 or inst_days > 0:
-            reasons.append(f"메이저수급({foreign_score+inst_score:.1f}점)")
+        reasons.append(f"차트/수급({score:.1f}점)")
 
-    # ==========================================
-    # 시그널 판정 및 타겟 가격 도출
-    # ==========================================
+    # 💡 [핵심] 공시 이벤트(선반영 필터 적용) 점수 합산
+    if market_type in ['KR', 'KOSPI', 'KOSDAQ'] and not is_etf:
+        event_bonus, event_msgs = check_recent_events(ticker, df, today_close)
+        if event_bonus != 0 or event_msgs:
+            score += event_bonus
+            reasons.extend(event_msgs)
+
     signal = 'BUY' if score >= BUY_THRESHOLD else 'HOLD'
     
     if score >= BUY_THRESHOLD: 
         if today_weekday in [3, 4]:
-            reasons.insert(0, f"\n🌟 [주말 돌파 VIP] 하락 압력을 이겨낸 찐텐 종목! (총 {score:.1f}점)\n")
+            reasons.insert(0, f"\n🌟 [주말 돌파 VIP] (최종 {score:.1f}점)\n")
         else:
-            reasons.append(f"종합: {score:.1f}점 [{market_type}]")
+            reasons.append(f"최종: {score:.1f}점")
             
-        reasons.append("\n⚠️ [주의] 매수 직후 증권사 앱에서 '자동 감시 주문(예약 매도)'으로 아래 익절/손절가를 반드시 세팅하세요!")
+        reasons.append("\n⚠️ [주의] 매수 직후 증권사 앱에서 예약 매도를 세팅하세요!")
 
     target_price = 0
     stop_loss = 0
     
     if market_type in ['KR', 'KOSPI', 'KOSDAQ']:
-        # 💡 [수정] 국장 익절가 하향: 볼린저 밴드 상단과 매물대 중 '더 가까운(낮은)' 가격에서 빠르게 익절
         target_price = min(bb_upper, poc_price)
         if target_price <= today_close: 
             target_price = today_close + (today_atr * 1.5)
         stop_loss = today_close - (today_atr * 2)
     else: 
-        # 💡 [수정] 미장 익절가 하향: 기존 3배에서 1.5배로 낮춰 승률을 우선 확보
         target_price = today_close + (today_atr * 1.5)
         stop_loss = max(today_sma_20, today_close - (today_atr * 1.5))
         
-    price_targets = {
-        'TP': int(target_price),
-        'SL': int(stop_loss)
-    }
+    price_targets = {'TP': int(target_price), 'SL': int(stop_loss)}
     
     return signal, round(score, 1), reasons, df, price_targets
