@@ -1,6 +1,6 @@
 # 업데이트날짜: 2026.07.07
 # 작성자: j-neat
-# 투자 전략 및 시그널 전담 모듈 (RSI 모멘텀 보정 및 매물대 기간 고정, 낙폭과대 예외 추가)
+# 투자 전략 및 시그널 전담 모듈 (승률 극대화용 단기 익절/스나이퍼 버전)
 
 import pandas as pd
 import numpy as np
@@ -14,7 +14,6 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# 💡 [수정 2] 매물대 계산 시 최근 120일(약 6개월) 고정 윈도우 적용
 def get_poc_price(df, bins=20, window=120):
     try:
         recent_df = df.tail(window)
@@ -73,7 +72,6 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     bb_upper = df['BB_Upper'].fillna(today_close).iloc[-1]
     
     high_52w = df['High'].rolling(window=min(252, len(df))).max().iloc[-1]
-    
     gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
     
     today_weekday = df.index[-1].weekday()
@@ -85,16 +83,10 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     etf_keywords = ['레버리지', '인버스', 'KODEX', 'TIGER', 'ETF', 'TRUST', 'FUND', 'PROSHARES', 'DIREXION', 'ACE']
     is_etf = any(keyword in str(stock_name).upper() for keyword in etf_keywords)
 
-    # ==========================================
-    # 직관적 비례 스코어링 (현재값 / 목표값 * 만점)
-    # ==========================================
-    
     if is_etf:
-        # 💡 [수정 3] 20일선 아래라도, -5% 이상 벌어진 과대낙폭 상태면 예외적으로 통과 허용
         if today_close <= today_sma_20 and gap_percent > -5.0:
             return 'HOLD', 0, ["추세 이탈(20일선 하회 및 애매한 위치)"], df, {}
             
-        # 💡 [수정 1] RSI 모멘텀 타겟 상향 (60 이상 시 만점)
         rsi_score = min(20.0, (today_rsi / 60.0) * 20.0) if not pd.isna(today_rsi) else 0.0
         score += rsi_score
         reasons.append(f"RSI({rsi_score:.1f}점)")
@@ -104,11 +96,10 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         score += vol_score
         reasons.append(f"거래량({vol_score:.1f}점)")
 
-        # 💡 [수정 3 연계] 낙폭 과대 시 20일선 이격도에 프리미엄 만점 부여
         if 0 < gap_percent <= 3:
             sma_score = min(20.0, (gap_percent / 3.0) * 20.0)
         elif gap_percent <= -5.0:
-            sma_score = 20.0 # 낙폭과대 프리미엄
+            sma_score = 20.0 
         else:
             sma_score = 0.0
             
@@ -140,7 +131,6 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         high_score = min(20.0, (high_gap / 0.95) * 20.0)
         score += high_score
         
-        # 💡 [수정 1] 미장 RSI 모멘텀 타겟 (60 이상 시 만점)
         rsi_score = min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
         score += rsi_score
         
@@ -158,9 +148,7 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         reasons.append(f"모멘텀({high_score+rsi_score+vol_score+sma_score+poc_score:.1f}점)")
             
     else: 
-        # 💡 [수정 1] 국장 RSI 모멘텀 타겟 (60 이상 시 만점)
         rsi_score = min(15.0, (today_rsi / 60.0) * 15.0) if not pd.isna(today_rsi) else 0.0
-        
         sma_score = min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
         
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
@@ -200,12 +188,14 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     stop_loss = 0
     
     if market_type in ['KR', 'KOSPI', 'KOSDAQ']:
-        target_price = max(bb_upper, poc_price)
+        # 💡 [수정] 국장 익절가 하향: 볼린저 밴드 상단과 매물대 중 '더 가까운(낮은)' 가격에서 빠르게 익절
+        target_price = min(bb_upper, poc_price)
         if target_price <= today_close: 
             target_price = today_close + (today_atr * 1.5)
         stop_loss = today_close - (today_atr * 2)
     else: 
-        target_price = today_close + (today_atr * 3)
+        # 💡 [수정] 미장 익절가 하향: 기존 3배에서 1.5배로 낮춰 승률을 우선 확보
+        target_price = today_close + (today_atr * 1.5)
         stop_loss = max(today_sma_20, today_close - (today_atr * 1.5))
         
     price_targets = {
