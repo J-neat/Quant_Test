@@ -35,8 +35,8 @@ def check_recent_events(ticker, df, today_close):
                 if price_change_pct >= 5.0:
                     event_msgs.append(f"⚠️ 호재 선반영 차단: {title[:15]}... (이미 {price_change_pct:.1f}% 상승)")
                 else:
-                    event_score += 15.0
-                    event_msgs.append(f"🎉 호재공시(+15): {title[:15]}... (반영률 {price_change_pct:.1f}%)")
+                    event_score += 10.0
+                    event_msgs.append(f"🎉 호재공시(+10): {title[:15]}... (반영률 {price_change_pct:.1f}%)")
                     
             elif event_type == 'BAD':
                 if price_change_pct <= -10.0:

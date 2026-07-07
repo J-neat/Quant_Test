@@ -88,7 +88,7 @@ def plot_stock_chart(df, ticker, score, reasons, fundamentals=None):
         fund_text = f" | PER: {per:.1f}배 | PBR: {pbr:.1f}배 | ROE: {roe:.1f}% | 부채비율: {debt:.1f}%"
     
     # 💡 [핵심] 폰트 깨짐을 유발하는 주요 이모지들을 정규식으로 제거
-    clean_reasons = [re.sub(r'[🌟⚠️🔥🚫✅❌🎯🛑]', '', r).strip() for r in reasons]
+    clean_reasons = [re.sub(r'[🌟⚠️🔥🚫✅❌🎯🛑🎉🚨]', '', r).strip() for r in reasons]
     
     detail_text = (
         f"[현재 지표 요약]\n"

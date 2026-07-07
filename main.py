@@ -15,7 +15,7 @@ from strategy import apply_multi_factor_strategy
 from visualizer import plot_stock_chart
 from slack_notifier import send_quant_signal, clear_slack_channel  
 from db_manager import save_signal_to_db, get_recent_buy_signals 
-from dart_manager import collect_and_save_disclosures # 💡 DART 매니저 추가
+from dart_manager import collect_and_save_disclosures 
 
 load_dotenv()  
 
@@ -90,7 +90,6 @@ def send_position_tracking_report(token, channel_id):
             supply_info = get_supply_data(ticker, market_type)
             is_bull = check_market_regime('^KS11' if market_type in ['KOSPI', 'KOSDAQ'] else 'QQQ')
 
-            # ticker 인자 추가 전달
             signal, current_score, _, _, targets = apply_multi_factor_strategy(
                 df, fundamentals, market_type, supply_info, ticker, is_bull, ticker
             )
@@ -110,17 +109,38 @@ def send_position_tracking_report(token, channel_id):
     tracking_msg += "\n------------------------------------------------------------\n👇 *오늘의 신규 시그널* 👇"
     send_quant_signal(token, channel_id, tracking_msg)
 
+
 if __name__ == "__main__":
-    print("=== 🚀 멀티팩터 퀀트 스크리닝 시작 ===")
+    print("=== 🚀 멀티팩터 퀀트 시스템 시작 ===")
     clean_charts_folder()
+    
+    # 1. 대상 유니버스 셋업
+    us_stocks = get_nasdaq_100()
+    kr_kospi_stocks = get_kospi_top_100() 
+    kr_kosdaq_stocks = get_kosdaq_top_100()
+
+    # ==========================================================
+    # 💡 [Phase 1] DART 공시 데이터 선제 수집 및 DB 적재
+    # ==========================================================
+    print("\n📡 [Phase 1] 한국 시장(KOSPI/KOSDAQ) 공시 데이터 수집 중...")
+    
+    for ticker, name in kr_kospi_stocks.items():
+        collect_and_save_disclosures(ticker, name)
+        
+    for ticker, name in kr_kosdaq_stocks.items():
+        collect_and_save_disclosures(ticker, name)
+        
+    print("✅ 공시 데이터 DB 적재 완료!\n")
+    # ==========================================================
+
+    # 슬랙 초기화 및 A/S 리포트 발송
     clear_slack_channel(SLACK_TOKEN, SLACK_CHANNEL)
     send_term_dictionary(SLACK_TOKEN, SLACK_CHANNEL)
     send_position_tracking_report(SLACK_TOKEN, SLACK_CHANNEL)
 
-    us_stocks = get_nasdaq_100()
-    kr_kospi_stocks = get_kospi_top_100() 
-    kr_kosdaq_stocks = get_kosdaq_top_100()
-    
+    # ==========================================================
+    # 💡 [Phase 2] 본격적인 전략 분석 및 스크리닝 (분리됨)
+    # ==========================================================
     groups = [
         ("🇺🇸 (NASDAQ 100)", us_stocks, 'QQQ', 'NASDAQ'), 
         ("🇰🇷 (KOSPI 100)", kr_kospi_stocks, '^KS11', 'KOSPI'), 
@@ -128,22 +148,19 @@ if __name__ == "__main__":
     ]
     
     for flag, stock_dict, index_ticker, market_type in groups:
-        print(f"\n▶️ {flag} 분석 중...")
+        print(f"\n▶️ [Phase 2] {flag} 차트 분석 중...")
         is_bull_market = check_market_regime(index_ticker)
         
         for ticker, name in stock_dict.items():
             try:
-                # 💡 [핵심] 한국 종목이면 차트 분석 전에 DART 공시부터 수집해서 DB에 갱신
-                if market_type in ['KOSPI', 'KOSDAQ']:
-                    collect_and_save_disclosures(ticker, name)
-
+                # 공시 수집 함수(collect_and_save_disclosures)는 여기서 삭제됨!
+                
                 raw_data = get_stock_data(ticker, period='6mo')
                 if raw_data is None or len(raw_data) < 20: continue
 
                 fundamentals = get_fundamental_data(ticker)
                 supply_info = get_supply_data(ticker, market_type)
                 
-                # ticker 인자 추가 전달
                 signal, score, reasons, processed_data, price_targets = apply_multi_factor_strategy(
                     raw_data, fundamentals, market_type, supply_info, name, is_bull_market, ticker
                 )
