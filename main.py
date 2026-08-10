@@ -66,7 +66,15 @@ def check_market_regime(index_ticker):
         return True
 
 def send_term_dictionary(token, channel_id):
-    msg = "📚 *[퀀트 시그널 용어 사전]* 📚\n• RSI / OBV / POC 등 지표 안내\n------------------------------------------------------------"
+    msg = (
+        "📚 *[퀀트 시그널 용어 사전]* 📚\n\n"
+        "• *RSI (상대강도지수):* 주가의 과열/침체를 나타냅니다. 30 이하면 과매도(바닥권), 70 이상이면 과매수(고점권)로 해석합니다.\n"
+        "• *OBV:* 거래량 누적 지표입니다. 주가가 하락하는데 OBV가 버틴다면 '스마트 머니'의 매집을 의심할 수 있습니다.\n"
+        "• *POC (Point of Control):* 최근 6개월간 가장 많은 거래가 이루어진 '최대 매물대' 가격입니다. 강력한 지지선/저항선 역할을 합니다.\n"
+        "• *PER / PBR:* 기업의 수익성과 자산 대비 현재 주가의 고평가/저평가를 나타내는 기본적 분석 지표입니다.\n"
+        "------------------------------------------------------------"
+    )
+    send_quant_signal(token, channel_id, msg)
     send_quant_signal(token, channel_id, msg)
 
 def send_position_tracking_report(token, channel_id):
@@ -169,11 +177,19 @@ if __name__ == "__main__":
                 
                 if signal == 'BUY':
                     current_price = raw_data['Close'].iloc[-1]
+                    # 💡 [추가] 오늘 시가 데이터 가져오기
+                    open_price = raw_data['Open'].iloc[-1] 
+                    
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     plot_stock_chart(processed_data, display_name, score, reasons, fundamentals)
                     
-                    msg = (f"🚨 *[매수 추천 봇]*\n⏰ `{now}`\n📌 {display_name}\n💰 `{current_price:,.0f}`\n"
-                           f"🎯 익절: `{price_targets['TP']:,.0f}`\n🛑 손절: `{price_targets['SL']:,.0f}`\n"
+                    # 💡 [수정] 슬랙 메시지에 당일 시가(open_price) 출력 추가
+                    msg = (f"🚨 *[매수 추천 봇]*\n"
+                           f"⏰ `{now}`\n📌 {display_name}\n"
+                           f"📈 *당일 시가:* `{open_price:,.0f}`\n"
+                           f"💰 *현재가:* `{current_price:,.0f}`\n"
+                           f"🎯 익절(시가기준): `{price_targets['TP']:,.0f}`\n"
+                           f"🛑 손절(시가기준): `{price_targets['SL']:,.0f}`\n"
                            f"📊 스코어: `{score}점`\n💡 사유: {', '.join(reasons)}")
                     
                     send_quant_signal(SLACK_TOKEN, SLACK_CHANNEL, msg, f"charts/{display_name}_chart.png")
