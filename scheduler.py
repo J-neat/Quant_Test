@@ -1,6 +1,6 @@
-# 업데이트날짜: 2026.07.01
+# 업데이트날짜: 2026.08.10
 # 작성자: j-neat
-# 스케줄러 모듈
+# 스케줄러 모듈 (30분 법칙 및 미장 시간대 최적화 버전)
 
 import schedule
 import time
@@ -20,12 +20,22 @@ def run_quant_bot():
     except subprocess.CalledProcessError as e:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚨 봇 실행 중 오류 발생: {e}")
 
-# 하루 4번 스크리닝을 위한 실행 시간대 배열
-run_times = ["08:30", "08:50", "09:15", "09:30", "10:00", "11:00", "12:00", "13:00", "14:00", "15:20", "16:00", "17:00"]
+# 💡 [핵심] 30분 법칙 캔들 완성 이후 및 미장(NASDAQ) 시간대 포함
+run_times = [
+    # 한국장(09:00 개장) 타점
+    "09:35", # 30분 법칙 완성 직후 (핵심)
+    "11:00", 
+    "13:30", 
+    "15:10", # 종가 베팅
+    
+    # 미국장(22:30 서머타임 개장) 타점
+    "23:10", # 미장 30분 법칙 완성 직후
+    "01:00",
+    "04:00",
+    "04:30"
+]
 
 days = ["monday", "tuesday", "wednesday", "thursday", "friday"]
-
-
 
 for day in days:
     for t in run_times:
@@ -39,6 +49,5 @@ try:
         schedule.run_pending()
         time.sleep(60)
 except KeyboardInterrupt:
-    # Ctrl + C 를 누르면 에러를 뿜지 않고 아래 코드를 실행하며 깔끔하게 종료됨
     print("\n🛑 사용자의 요청으로 퀀트 스케줄러를 안전하게 중지합니다.")
     print("✨ 시스템 OFF 완료!")
