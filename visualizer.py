@@ -4,6 +4,7 @@
 
 import matplotlib.pyplot as plt
 import matplotlib
+matplotlib.use('Agg')
 import numpy as np
 import os
 import re
@@ -102,5 +103,7 @@ def plot_stock_chart(df, ticker, score, reasons, fundamentals=None):
              bbox=dict(facecolor='#F5F5F5', edgecolor='#CCCCCC', alpha=0.9, boxstyle='round,pad=0.8'))
     
     plt.subplots_adjust(bottom=0.18)
+
+    plt.tight_layout()
     plt.savefig(f"charts/{ticker}_chart.png", dpi=120, bbox_inches='tight')
-    plt.close()
+    plt.close('all')
