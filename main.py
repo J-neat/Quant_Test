@@ -1,6 +1,6 @@
 # 업데이트날짜: 2026.08.13
 # 작성자: j-neat
-# 메인모듈 (슬랙 초기화 우선 실행 및 다트 공시 데이터 추가 로직)
+# 메인모듈 (DB 자동 청소 및 슬랙 백그라운드 초기화 적용 버전)
 
 import os
 import shutil
@@ -14,7 +14,7 @@ from data_collector import get_stock_data, get_fundamental_data, get_supply_data
 from strategy import apply_multi_factor_strategy
 from visualizer import plot_stock_chart
 from slack_notifier import send_quant_signal, clear_slack_channel
-from db_manager import save_signal_to_db, get_recent_buy_signals
+from db_manager import save_signal_to_db, get_recent_buy_signals, cleanup_old_db_data
 from dart_manager import collect_and_save_disclosures
 
 load_dotenv()
@@ -121,7 +121,10 @@ if __name__ == "__main__":
     print("=== 🚀 멀티팩터 퀀트 시스템 시작 ===")
     clean_charts_folder()
     
-    # 💡 [순서 변경] 프로그램 시작 직후 가장 먼저 슬랙 채널 청소 및 용어 사전 발송
+    # 💡 [핵심] 프로그램 시작 직후 가장 먼저 30일 지난 DB 데이터 청소
+    cleanup_old_db_data()
+    
+    # 프로그램 시작 직후 슬랙 채널 청소(백그라운드) 및 용어 사전 발송
     clear_slack_channel(SLACK_TOKEN, SLACK_CHANNEL)
     send_term_dictionary(SLACK_TOKEN, SLACK_CHANNEL)
     
@@ -176,7 +179,6 @@ if __name__ == "__main__":
                 
                 if signal == 'BUY':
                     current_price = raw_data['Close'].iloc[-1]
-                    # 💡 시가(Open) 고정 데이터 확보
                     open_price = raw_data['Open'].iloc[-1] 
                     
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
