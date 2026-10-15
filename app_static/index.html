@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0e11" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="퀀트시그널">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+  <link rel="stylesheet" href="/static/app.css?v=3">
+  <title>퀀트 시그널</title>
+</head>
+<body>
+  <!-- 잠금 화면 (APP_TOKEN 설정 시) -->
+  <section id="login" class="login" hidden>
+    <div class="login-box">
+      <img src="/static/icons/icon-192.png" alt="" class="login-icon">
+      <h1>퀀트 시그널</h1>
+      <p class="muted">서버에 설정한 비밀번호를 입력하세요</p>
+      <form id="login-form">
+        <input id="login-token" type="password" inputmode="text" autocomplete="current-password" placeholder="비밀번호" required>
+        <button class="btn btn-primary btn-block" type="submit">들어가기</button>
+      </form>
+      <p id="login-error" class="error-text" hidden></p>
+    </div>
+  </section>
+
+  <div id="app" hidden>
+    <header class="topbar">
+      <h1 id="page-title">오늘</h1>
+      <button id="refresh-btn" class="icon-btn" aria-label="새로고침">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
+
+    <div id="offline" class="offline" hidden>서버에 연결할 수 없어요 · PC에서 <code>web_app.py</code>가 켜져 있는지 확인하세요</div>
+
+    <main>
+      <!-- 오늘 -->
+      <section id="tab-today" class="tab">
+        <div id="install-banner" class="banner" hidden>
+          <div class="banner-body">
+            <strong>홈 화면에 추가하면 앱처럼 쓸 수 있어요</strong>
+            <span>Safari 아래쪽 <b>공유</b> 버튼 → <b>홈 화면에 추가</b>. 매수 알림도 홈 화면 앱에서만 받을 수 있어요.</span>
+          </div>
+          <button class="icon-btn banner-close" data-dismiss="install" aria-label="닫기">✕</button>
+        </div>
+        <div id="push-banner" class="banner banner-accent" hidden>
+          <div class="banner-body">
+            <strong>매수 추천이 뜨면 바로 알려드릴까요?</strong>
+            <span>슬랙과 별도로 이 휴대폰에 알림이 와요.</span>
+          </div>
+          <button class="btn btn-primary btn-sm" data-action="enable-push">알림 켜기</button>
+        </div>
+        <div id="running-banner" class="banner banner-running" hidden>
+          <span class="spinner"></span>
+          <div class="banner-body"><strong id="running-text">분석 중</strong><span>끝나면 이 화면이 자동으로 갱신돼요</span></div>
+          <button class="btn btn-ghost btn-sm" data-goto="bot">보기</button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>시장 상태</h2><span class="muted small">지수 200일선 기준</span></div>
+          <div id="regimes" class="regimes"><div class="skeleton"></div></div>
+        </div>
+
+        <div class="section-head">
+          <h2>오늘의 추천 <span id="today-count" class="count"></span></h2>
+        </div>
+        <div id="today-list" class="list"><div class="skeleton tall"></div></div>
+      </section>
+
+      <!-- 추적 -->
+      <section id="tab-track" class="tab" hidden>
+        <div class="controls">
+          <div class="segmented" id="track-market">
+            <button class="active" data-value="ALL">전체</button><button data-value="KR">한국</button><button data-value="US">미국</button>
+          </div>
+          <div class="segmented" id="track-days">
+            <button data-value="3">3일</button><button class="active" data-value="7">7일</button><button data-value="30">30일</button>
+          </div>
+        </div>
+        <div id="track-summary" class="summary"></div>
+        <div id="track-list" class="list"><div class="skeleton tall"></div></div>
+        <p class="footnote">수익률은 기간 내 <b>최초 추천가</b> 기준 · 현재가는 약 3분마다 갱신</p>
+      </section>
+
+      <!-- 공시 -->
+      <section id="tab-news" class="tab" hidden>
+        <div class="controls">
+          <div class="segmented" id="news-filter">
+            <button class="active" data-value="ALL">전체</button><button data-value="GOOD">호재</button><button data-value="BAD">악재</button>
+          </div>
+        </div>
+        <div id="news-list" class="list"><div class="skeleton tall"></div></div>
+        <p class="footnote">한국장 실행 때 DART 공시·네이버 뉴스에서 수집 · 30일 보관</p>
+      </section>
+
+      <!-- 봇 -->
+      <section id="tab-bot" class="tab" hidden>
+        <div id="bot-status" class="card"></div>
+
+        <div class="run-buttons">
+          <button class="btn btn-run" data-run="KR"><span class="flag">🇰🇷</span><span><b>한국장 실행</b><small>코스피·코스닥</small></span></button>
+          <button class="btn btn-run" data-run="US"><span class="flag">🇺🇸</span><span><b>미국장 실행</b><small>나스닥 100</small></span></button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>알림</h2></div>
+          <div class="row">
+            <div class="row-body"><strong>매수 추천 알림</strong><span id="push-status" class="muted small">확인 중…</span></div>
+            <label class="switch"><input type="checkbox" id="push-toggle"><span></span></label>
+          </div>
+          <button class="btn btn-ghost btn-block" id="push-test" disabled>테스트 알림 보내기</button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>실행 기록</h2></div>
+          <div id="run-history" class="list compact"></div>
+        </div>
+
+        <details class="card">
+          <summary><h2>자동 실행 시간표</h2></summary>
+          <div id="schedule"></div>
+        </details>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button data-tab="today" class="active"><svg viewBox="0 0 24 24"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>오늘</span></button>
+      <button data-tab="track"><svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>추적</span></button>
+      <button data-tab="news"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM9 10h7M9 14h7M9 18h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>공시</span></button>
+      <button data-tab="bot"><svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4v4M9 13h.01M15 13h.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><span>봇</span><i id="bot-dot" class="dot" hidden></i></button>
+    </nav>
+  </div>
+
+  <!-- 상세 바텀시트 -->
+  <div id="sheet-backdrop" class="backdrop" hidden></div>
+  <section id="sheet" class="sheet" hidden aria-modal="true" role="dialog">
+    <div class="sheet-grip"></div>
+    <div id="sheet-content"></div>
+  </section>
+
+  <!-- 확인 다이얼로그 -->
+  <div id="dialog" class="dialog" hidden role="alertdialog">
+    <div class="dialog-box">
+      <h3 id="dialog-title"></h3>
+      <p id="dialog-text"></p>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" id="dialog-cancel">취소</button>
+        <button class="btn btn-primary" id="dialog-ok">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 차트 전체화면 -->
+  <div id="viewer" class="viewer" hidden><img alt="차트"><button class="icon-btn viewer-close" aria-label="닫기">✕</button></div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>
