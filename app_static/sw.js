@@ -1,6 +1,6 @@
 // 퀀트 시그널 서비스 워커: 푸시 알림 + 앱 화면 캐시(서버가 꺼져 있어도 화면은 열리도록)
-const CACHE = "quant-shell-v3";
-const SHELL = ["/", "/static/app.css?v=3", "/static/app.js?v=3", "/static/icons/icon-192.png", "/manifest.webmanifest"];
+const CACHE = "quant-shell-v4";
+const SHELL = ["/", "/static/app.css?v=4", "/static/app.js?v=4", "/static/icons/icon-192.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

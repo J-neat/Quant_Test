@@ -74,7 +74,10 @@ function openSheet(html) {
   $("#sheet").hidden = $("#sheet-backdrop").hidden = false;
   $("#sheet").scrollTop = 0;
 }
-function closeSheet() { $("#sheet").hidden = $("#sheet-backdrop").hidden = true; }
+function closeSheet() {
+  $("#sheet").hidden = $("#sheet-backdrop").hidden = true;
+  if (state.scheduleEditing) { state.scheduleEditing = false; if (state.tab === "bot") load("bot"); }
+}
 
 // ---------- 탭 ----------
 function switchTab(tab, push = true) {
@@ -255,13 +258,76 @@ async function loadBot() {
         <span>${relDay(h.started_at)} · ${h.status === "running" ? "실행 중" : h.status === "success" ? `추천 ${h.signals}건` : "실패"}</span></div>
       <span class="muted">›</span>
     </button>`).join("") : `<p class="muted small" style="margin:0">아직 실행 기록이 없어요</p>`;
-  // 시간표
-  $("#schedule").innerHTML = `<div class="schedule-grid">
-    <div><b>🇰🇷 한국장</b> <span class="muted small">(한국 시간)</span><ul>${r.schedule.KR.map((t) => `<li>${t}</li>`).join("")}</ul></div>
-    <div><b>🇺🇸 미국장</b> <span class="muted small">(뉴욕 시간)</span><ul>${r.schedule.US.map((t) => `<li>${t}</li>`).join("")}</ul></div>
-  </div><p class="footnote" style="text-align:left">평일만 실행 · 미국장은 서머타임 자동 반영</p>`;
+  renderScheduleSummary(r.schedule, r.next_runs, r.scheduler);
   refreshPushUI();
 }
+// ---------- 자동 실행 시간표 ----------
+const SCHED_META = {
+  KR: { flag: "🇰🇷", name: "한국장", tz: "한국 시간", open: "09:00", close: "15:30", hours: "장 09:00–15:30" },
+  US: { flag: "🇺🇸", name: "미국장", tz: "뉴욕 시간", open: "09:30", close: "16:00", hours: "장 09:30–16:00 (뉴욕)" },
+};
+const outOfHours = (m, t) => t < SCHED_META[m].open || t > SCHED_META[m].close;
+function renderScheduleSummary(schedule, next, schedulerOn) {
+  if (!schedulerOn) {
+    $("#schedule").innerHTML = `<p class="muted small" style="margin:0">서버의 자동 실행이 꺼져 있어요 (.env APP_SCHEDULER=0)</p>`;
+    return;
+  }
+  $("#schedule").innerHTML = ["KR", "US"].map((m) => {
+    const c = schedule[m], meta = SCHED_META[m];
+    const status = !c.enabled ? `<span class="pill pill-off">꺼짐</span>`
+      : !c.times.length ? `<span class="pill pill-warn">시간 없음</span>`
+      : `<span class="pill pill-ok">하루 ${c.times.length}회</span>`;
+    const nextText = c.enabled && next && next[m] ? `다음 ${relDay(next[m])}` : "";
+    const times = c.times.map((t) => (m === "US" ? `${t}<small class="muted">(${c.kst[t].replace(" (다음날)", "")})</small>` : t)).join(" · ");
+    return `<div class="sched-row${c.enabled ? "" : " is-off"}">
+      <div class="row"><div class="row-body"><strong>${meta.flag} ${meta.name}</strong><span class="muted small">${nextText || meta.tz + " 기준"}</span></div>${status}</div>
+      ${c.times.length ? `<div class="sched-times">${times}</div>` : ""}
+    </div>`;
+  }).join("") + `<p class="footnote" style="text-align:left;margin-top:8px">평일만 실행 · 미국장은 뉴욕 시간 기준(괄호는 한국 시간, 서머타임 자동 반영)</p>`;
+}
+async function openScheduleEditor() {
+  try { renderScheduleEditor((await api("/api/schedule")).schedule); } catch (e) { handleError(e); }
+}
+function renderScheduleEditor(schedule, keepOpen = false) {
+  const html = `
+    <h3>자동 실행 시간표</h3>
+    <p class="sub">평일에만 실행돼요. 바꾸면 바로 저장되고 다음 실행부터 적용돼요.</p>
+    ${["KR", "US"].map((m) => {
+      const c = schedule[m], meta = SCHED_META[m];
+      const chips = c.times.length ? c.times.map((t) => `
+        <span class="chip${outOfHours(m, t) ? " chip-warn" : ""}">
+          <b>${t}</b>${m === "US" ? `<small>한국 ${esc(c.kst[t])}</small>` : ""}
+          <button data-sched-remove="${m}" data-time="${t}" aria-label="${t} 삭제">✕</button>
+        </span>`).join("") : `<span class="muted small">설정된 시간이 없어요</span>`;
+      return `<section class="sched-sec${c.enabled ? "" : " is-off"}">
+        <div class="row"><div class="row-body"><strong>${meta.flag} ${meta.name}</strong><span class="muted small">${meta.tz} · ${meta.hours}</span></div>
+          <label class="switch" aria-label="${meta.name} 자동 실행"><input type="checkbox" data-sched-toggle="${m}" ${c.enabled ? "checked" : ""}><span></span></label></div>
+        <div class="chips">${chips}</div>
+        <div class="add-row">
+          <input type="time" id="sched-add-${m}" value="${m === "KR" ? "09:35" : "10:10"}" aria-label="${meta.name} 추가할 시간">
+          <button class="btn btn-ghost btn-sm" data-sched-add="${m}">+ 시간 추가</button>
+        </div>
+      </section>`;
+    }).join("")}
+    <p class="footnote" style="text-align:left"><span class="legend-warn"></span> 주황색은 장 운영 시간 밖이에요 (장 전에는 전날 데이터로 분석)</p>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" data-action="reset-schedule">기본값으로</button>
+      <button class="btn btn-primary" data-close-sheet>완료</button>
+    </div>`;
+  if (keepOpen && !$("#sheet").hidden) { const y = $("#sheet").scrollTop; $("#sheet-content").innerHTML = html; $("#sheet").scrollTop = y; }
+  else openSheet(html);
+  state.scheduleEditing = true;
+}
+async function saveSchedule(body, message = "저장했어요") {
+  try {
+    const r = await api("/api/schedule", { method: "PUT", body: JSON.stringify(body) });
+    renderScheduleEditor(r.schedule, true);
+    renderScheduleSummary(r.schedule, r.next_runs, r.scheduler);
+    toast(message);
+  } catch (e) { handleError(e); openScheduleEditor(); }
+}
+const currentEditorTimes = (m) => $$(`[data-sched-remove="${m}"]`).map((b) => b.dataset.time);
+
 async function loadLog(id, target, lines = 40) {
   try {
     const { lines: l } = await api(`/api/runs/${id}/log?lines=${lines}`);
@@ -384,8 +450,31 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.closeSheet !== undefined) return closeSheet();
   if (t.dataset.dismiss) { dismiss(t.dataset.dismiss); t.closest(".banner").hidden = true; return; }
   if (t.dataset.action === "enable-push") { if (await enablePush()) refreshPushUI(); return; }
+  if (t.dataset.action === "edit-schedule") return openScheduleEditor();
+  if (t.dataset.schedRemove) {
+    const m = t.dataset.schedRemove;
+    return saveSchedule({ [m]: { times: currentEditorTimes(m).filter((x) => x !== t.dataset.time) } }, `${t.dataset.time} 삭제했어요`);
+  }
+  if (t.dataset.schedAdd) {
+    const m = t.dataset.schedAdd, v = $(`#sched-add-${m}`).value;
+    if (!v) return toast("추가할 시간을 골라주세요");
+    if (currentEditorTimes(m).includes(v)) return toast("이미 있는 시간이에요");
+    return saveSchedule({ [m]: { times: [...currentEditorTimes(m), v] } }, `${v} 추가했어요`);
+  }
+  if (t.dataset.action === "reset-schedule") {
+    if (!(await confirmDialog("기본 시간표로 되돌릴까요?", "직접 바꾼 시간과 켜기/끄기 설정이 처음 상태로 돌아가요.", "되돌리기"))) return;
+    try {
+      const r = await api("/api/schedule", { method: "DELETE" });
+      renderScheduleEditor(r.schedule, true); renderScheduleSummary(r.schedule, r.next_runs, r.scheduler); toast("기본값으로 되돌렸어요");
+    } catch (e) { handleError(e); }
+    return;
+  }
 });
 $("#sheet-backdrop").addEventListener("click", closeSheet);
+document.addEventListener("change", (e) => {
+  const m = e.target.dataset && e.target.dataset.schedToggle;
+  if (m) saveSchedule({ [m]: { enabled: e.target.checked } }, `${SCHED_META[m].name} 자동 실행을 ${e.target.checked ? "켰어요" : "껐어요"}`);
+});
 $("#viewer").addEventListener("click", () => ($("#viewer").hidden = true));
 $("#refresh-btn").addEventListener("click", () => load());
 $("#push-toggle").addEventListener("change", async (e) => {

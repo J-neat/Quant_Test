@@ -196,6 +196,24 @@ details.card summary::-webkit-details-marker { display: none; }
 .log { margin-top: 12px; background: var(--card-2); border-radius: 10px; padding: 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; }
 .schedule-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; font-size: 14px; }
 .schedule-grid ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+/* 시간표 */
+.sched-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sched-row:last-of-type { border-bottom: 0; }
+.sched-times { margin-top: 6px; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1.7; }
+.sched-times small { margin-left: 2px; font-size: 11px; }
+.is-off .sched-times, .is-off .chips { opacity: .4; }
+.sched-sec { background: var(--card-2); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+.sched-sec .row-body strong { font-size: 16px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: var(--card); border-radius: 10px; padding: 6px 4px 6px 10px; font-variant-numeric: tabular-nums; border: 1px solid var(--line); }
+.chip b { font-size: 15px; }
+.chip small { font-size: 11px; color: var(--muted); }
+.chip button { border: 0; background: transparent; color: var(--muted); width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.chip button:active { background: var(--card-2); }
+.chip-warn { border-color: var(--warn); background: var(--warn-soft); }
+.legend-warn { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--warn-soft); border: 1px solid var(--warn); vertical-align: -1px; }
+.add-row { display: flex; gap: 8px; }
+.add-row input[type=time] { flex: 1; min-height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 0 12px; font-size: 16px; font-variant-numeric: tabular-nums; }
 .footnote { font-size: 12px; color: var(--muted); text-align: center; margin: 4px 0 0; }
 
 /* 탭바 */

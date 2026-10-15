@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=4">
   <title>퀀트 시그널</title>
 </head>
 <body>
@@ -123,10 +123,10 @@
           <div id="run-history" class="list compact"></div>
         </div>
 
-        <details class="card">
-          <summary><h2>자동 실행 시간표</h2></summary>
+        <div class="card">
+          <div class="card-head"><h2>자동 실행 시간표</h2><button class="btn btn-ghost btn-sm" data-action="edit-schedule">편집</button></div>
           <div id="schedule"></div>
-        </details>
+        </div>
       </section>
     </main>
 
@@ -161,6 +161,6 @@
   <div id="viewer" class="viewer" hidden><img alt="차트"><button class="icon-btn viewer-close" aria-label="닫기">✕</button></div>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>
