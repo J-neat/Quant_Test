@@ -47,7 +47,30 @@ CREATE TABLE IF NOT EXISTS dart_disclosures (
     UNIQUE (ticker, report_title)
 );
 CREATE INDEX IF NOT EXISTS idx_disclosures_ticker ON dart_disclosures (ticker);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint   TEXT PRIMARY KEY,
+    p256dh     TEXT NOT NULL,
+    auth       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bot_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    market      TEXT NOT NULL,
+    trigger     TEXT NOT NULL,       -- 'schedule' / 'manual'
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    status      TEXT NOT NULL,       -- 'running' / 'success' / 'failed'
+    signals     INTEGER DEFAULT 0,
+    log_path    TEXT
+);
 """
+
+# 앱(web_app.py) 표시용으로 나중에 추가된 컬럼 — 기존 DB에는 자동으로 ALTER TABLE
+SIGNAL_EXTRA_COLUMNS = {"open_price": "REAL", "tp": "REAL", "sl": "REAL", "chart_path": "TEXT"}
+CHART_DIR = os.path.join(os.path.dirname(DB_PATH), "charts")
+CHART_RETENTION_DAYS = 90
 
 _initialized = False
 
@@ -60,6 +83,11 @@ def get_connection():
     if not _initialized:
         conn.execute("PRAGMA journal_mode=WAL")  # 백테스트/리포트가 읽는 중에도 봇이 쓸 수 있게
         conn.executescript(SCHEMA)
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(quant_signals)")}
+        for col, col_type in SIGNAL_EXTRA_COLUMNS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE quant_signals ADD COLUMN {col} {col_type}")
+        conn.commit()
         _initialized = True
     return conn
 
@@ -80,7 +108,16 @@ def cleanup_old_db_data():
         with closing(get_connection()) as conn, conn:
             d = conn.execute("DELETE FROM dart_disclosures WHERE rcept_dt < ?", (disclosure_cutoff,)).rowcount
             s = conn.execute("DELETE FROM quant_signals WHERE created_at < ?", (signal_cutoff,)).rowcount
-        print(f"🧹 [DB 청소 완료] 공시 {d}건({DISCLOSURE_RETENTION_DAYS}일 경과), 추천 기록 {s}건({SIGNAL_RETENTION_DAYS}일 경과) 삭제")
+        # 앱용 차트 이미지는 용량 때문에 CHART_RETENTION_DAYS만 보관
+        removed_charts = 0
+        if os.path.isdir(CHART_DIR):
+            limit = datetime.now().timestamp() - CHART_RETENTION_DAYS * 86400
+            for name in os.listdir(CHART_DIR):
+                path = os.path.join(CHART_DIR, name)
+                if os.path.isfile(path) and os.path.getmtime(path) < limit:
+                    os.remove(path)
+                    removed_charts += 1
+        print(f"🧹 [DB 청소 완료] 공시 {d}건({DISCLOSURE_RETENTION_DAYS}일 경과), 추천 기록 {s}건({SIGNAL_RETENTION_DAYS}일 경과), 차트 {removed_charts}개 삭제")
     except Exception as e:
         print(f"🚨 [DB 청소 에러] 오래된 데이터를 삭제하는 중 문제가 발생했어: {e}")
 
@@ -106,9 +143,10 @@ def is_signal_saved_today(ticker, market_type):
         print(f"      🚨 [DB 에러] 오늘 추천 여부 조회 실패: {e}")
         return False
 
-def save_signal_to_db(ticker, stock_name, price, score, reasons_list, market_type):
+def save_signal_to_db(ticker, stock_name, price, score, reasons_list, market_type,
+                      open_price=None, tp=None, sl=None, chart_path=None):
     """
-    추천 종목 정보를 quant_signals 테이블에 저장합니다.
+    추천 종목 정보를 quant_signals 테이블에 저장합니다. (open_price/tp/sl/chart_path는 앱 표시용)
     같은 거래일에 이미 저장된 종목이면 중복 저장하지 않습니다 (그날 최초 추천가 유지).
     저장했으면 True, 중복/실패면 False
     """
@@ -120,8 +158,8 @@ def save_signal_to_db(ticker, stock_name, price, score, reasons_list, market_typ
 
         with closing(get_connection()) as conn, conn:
             conn.execute(
-                "INSERT INTO quant_signals (created_at, ticker, stock_name, price, score, reasons, market_type) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO quant_signals (created_at, ticker, stock_name, price, score, reasons, market_type, "
+                "open_price, tp, sl, chart_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     utc_now_iso(),
                     str(ticker),
@@ -129,8 +167,12 @@ def save_signal_to_db(ticker, stock_name, price, score, reasons_list, market_typ
                     float(price),
                     # 소수점 점수(65.8)를 반올림하여 정수(66)로 저장
                     int(round(float(score))),
-                    ", ".join(reasons_list),
+                    ", ".join(r.strip() for r in reasons_list),
                     str(market_type),
+                    None if open_price is None else float(open_price),
+                    None if tp is None else float(tp),
+                    None if sl is None else float(sl),
+                    chart_path,
                 ),
             )
         return True
@@ -193,3 +235,59 @@ def get_disclosures(ticker):
             (ticker,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+def get_signals_since(days=7):
+    """최근 days일 추천 기록 전체 (최신순) — 앱 표시용"""
+    since = to_utc_iso(datetime.now(timezone.utc) - timedelta(days=days))
+    with closing(get_connection()) as conn:
+        rows = conn.execute("SELECT * FROM quant_signals WHERE created_at >= ? ORDER BY created_at DESC, id DESC",
+                            (since,)).fetchall()
+    return [dict(r) for r in rows]
+
+def get_recent_disclosures(limit=50):
+    with closing(get_connection()) as conn:
+        rows = conn.execute("SELECT ticker, stock_name, report_title, event_type, rcept_dt FROM dart_disclosures "
+                            "ORDER BY rcept_dt DESC, id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+# ---------------------------------------------------------
+# push_subscriptions (아이폰 앱 푸시 알림 구독)
+# ---------------------------------------------------------
+def add_push_subscription(endpoint, p256dh, auth):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?)",
+                     (endpoint, p256dh, auth, utc_now_iso()))
+
+def remove_push_subscription(endpoint):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+
+def get_push_subscriptions():
+    with closing(get_connection()) as conn:
+        return [dict(r) for r in conn.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions").fetchall()]
+
+# ---------------------------------------------------------
+# bot_runs (봇 실행 기록 — 앱의 '실행' 탭)
+# ---------------------------------------------------------
+def start_bot_run(market, trigger, log_path):
+    with closing(get_connection()) as conn, conn:
+        cur = conn.execute("INSERT INTO bot_runs (market, trigger, started_at, status, log_path) VALUES (?, ?, ?, 'running', ?)",
+                           (market, trigger, utc_now_iso(), log_path))
+        return cur.lastrowid
+
+def finish_bot_run(run_id, status):
+    """실행 종료 기록. 실행 중 새로 저장된 추천 건수도 함께 기록"""
+    with closing(get_connection()) as conn, conn:
+        started = conn.execute("SELECT started_at FROM bot_runs WHERE id = ?", (run_id,)).fetchone()["started_at"]
+        n = conn.execute("SELECT COUNT(*) FROM quant_signals WHERE created_at >= ?", (started,)).fetchone()[0]
+        conn.execute("UPDATE bot_runs SET finished_at = ?, status = ?, signals = ? WHERE id = ?",
+                     (utc_now_iso(), status, n, run_id))
+
+def get_recent_bot_runs(limit=20):
+    with closing(get_connection()) as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM bot_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+
+def mark_stale_runs_failed():
+    """서버가 꺼지면서 'running'으로 남은 기록 정리 (서버 시작 시 호출)"""
+    with closing(get_connection()) as conn, conn:
+        conn.execute("UPDATE bot_runs SET status = 'failed', finished_at = ? WHERE status = 'running'", (utc_now_iso(),))
