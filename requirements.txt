@@ -46,3 +46,6 @@ yfinance==1.4.1
 supabase==2.31.0
 schedule==26.1.2
 OpenDartReader==0.2.2
+fastapi==0.115.12
+uvicorn==0.34.2
+pywebpush==2.0.3
