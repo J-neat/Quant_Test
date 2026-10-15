@@ -33,7 +33,7 @@ load_dotenv()
 
 import db_manager as db
 from push_notifier import get_public_key, send_push_all
-from scheduler import KR_RUN_TIMES, US_RUN_TIMES, KST, NY, due_jobs
+from scheduler import KST, NY, MARKET_TZ, DEFAULT_SCHEDULE, due_jobs, load_schedule, normalize_times
 from data_collector import INDEX_BY_MARKET
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,7 +53,9 @@ async def lifespan(_app):
     cleanup_logs()
     if SCHEDULER_ENABLED:
         threading.Thread(target=scheduler_loop, daemon=True).start()
-        print(f"⏰ 자동 실행 켜짐 — 한국장(KST): {', '.join(KR_RUN_TIMES)} / 미국장(뉴욕): {', '.join(US_RUN_TIMES)}")
+        sch = load_schedule()
+        print(f"⏰ 자동 실행 켜짐 — 한국장(KST): {', '.join(sch['KR']['times']) if sch['KR']['enabled'] else '꺼짐'}"
+              f" / 미국장(뉴욕): {', '.join(sch['US']['times']) if sch['US']['enabled'] else '꺼짐'}")
     print(f"📱 앱 서버 시작: http://localhost:{APP_PORT}  (잠금: {'켜짐' if APP_TOKEN else '꺼짐'})")
     yield
 
@@ -145,7 +147,11 @@ def scheduler_loop():
 def next_runs():
     """시장별 다음 자동 실행 시각 (KST)"""
     result = {}
-    for market, tz, times in (("KR", KST, KR_RUN_TIMES), ("US", NY, US_RUN_TIMES)):
+    schedule = load_schedule()
+    for market, tz in MARKET_TZ.items():
+        if not schedule[market]["enabled"] or not schedule[market]["times"]:
+            continue
+        times = schedule[market]["times"]
         now = datetime.now(tz)
         for day in range(0, 8):
             d = now + timedelta(days=day)
@@ -279,8 +285,53 @@ def runner_state():
 @app.get("/api/runs")
 def runs():
     return {"running": runner_state(), "history": db.get_recent_bot_runs(20),
-            "schedule": {"KR": KR_RUN_TIMES, "US": US_RUN_TIMES}, "next_runs": next_runs() if SCHEDULER_ENABLED else {},
+            "schedule": schedule_view(), "next_runs": next_runs() if SCHEDULER_ENABLED else {},
             "scheduler": SCHEDULER_ENABLED}
+
+def schedule_view():
+    """시간표 + 각 시간의 한국 시간 환산 (미국장은 서머타임에 따라 달라짐)"""
+    schedule = load_schedule()
+    view = {}
+    for market, tz in MARKET_TZ.items():
+        today = datetime.now(tz)
+        kst_times = {}
+        for t in schedule[market]["times"]:
+            slot = today.replace(hour=int(t[:2]), minute=int(t[3:]), second=0, microsecond=0)
+            k = slot.astimezone(KST)
+            kst_times[t] = k.strftime("%H:%M") + (" (다음날)" if k.date() > slot.date() else "")
+        view[market] = {**schedule[market], "kst": kst_times, "default": list(DEFAULT_SCHEDULE[market]["times"])}
+    return view
+
+@app.get("/api/schedule")
+def get_schedule():
+    return {"schedule": schedule_view(), "next_runs": next_runs() if SCHEDULER_ENABLED else {}, "scheduler": SCHEDULER_ENABLED}
+
+@app.put("/api/schedule")
+async def put_schedule(request: Request):
+    """시간표 저장: {"KR": {"enabled": true, "times": ["09:35", ...]}, "US": {...}} (보낸 시장만 변경)"""
+    body = await request.json()
+    current = load_schedule()
+    for market, conf in body.items():
+        if market not in current:
+            raise HTTPException(400, f"알 수 없는 시장: {market}")
+        if "times" in conf:
+            try:
+                times = normalize_times(conf["times"])
+            except (ValueError, TypeError):
+                raise HTTPException(400, "시간은 HH:MM 형식이어야 해요")
+            if len(times) > 24:
+                raise HTTPException(400, "하루 최대 24번까지 설정할 수 있어요")
+            current[market]["times"] = times
+        if "enabled" in conf:
+            current[market]["enabled"] = bool(conf["enabled"])
+    db.set_setting("schedule", current)
+    return get_schedule()
+
+@app.delete("/api/schedule")
+def reset_schedule():
+    """기본 시간표로 되돌리기"""
+    db.delete_setting("schedule")
+    return get_schedule()
 
 @app.post("/api/runs/{market}")
 def run_now(market: str):
