@@ -19,10 +19,24 @@ BAD_PENALTY_MAX = -30.0       # 하락 0% 이하(미반영)일 때
 BAD_PENALTY_FLOOR = -15.0     # BAD_FULL_REFLECT_PCT 이상 하락(충분히 반영)일 때
 BAD_FULL_REFLECT_PCT = 10.0
 
-# 시장별 매수 기준 점수 (목·금은 +10)
+# 시장별 매수 기준 점수
 # 💡 나스닥: 2025-10~2026-10 나스닥100 일별 점수 분포 기준 (52주 고가·거래량 공짜 점수 제거 후)
-#    50점 → 하루 평균 35건 / 80점(목금 90) → 하루 평균 5.8건(중앙값 4건)
-BUY_THRESHOLD_BY_MARKET = {'NASDAQ': 80.0, 'KOSPI': 50.0, 'KOSDAQ': 50.0}
+#    50점 → 하루 평균 35건 / 80점(목금 90) → 하루 평균 5.0건(중앙값 3건, 1년치 일봉 기준)
+#    ⚠️ 나스닥은 두 기간 모두 유효한 팩터가 없어 점수의 수익률 예측력은 거의 없음 (건수 조절용 기준)
+# 💡 한국(KOSPI/KOSDAQ): 2021~2026 팩터 연구로 점수 구조 교체 (아래 KR 스코어링 참고)
+#    기준 70점 → 상승장 하루 약 7~12건, 10일 초과수익 +0.70%(2021-23) / +0.93%(2024-26)
+#    (기존 점수 50점: +0.27% / +0.16%, 하루 23~37건)
+BUY_THRESHOLD_BY_MARKET = {'NASDAQ': 80.0, 'KOSPI': 70.0, 'KOSDAQ': 70.0}
+# 목·금 기준 가산점 (주말 리스크). 한국장은 데이터상 요일 효과가 없어 0
+WEEKEND_BUMP_BY_MARKET = {'NASDAQ': 10.0}
+
+# 52주 고가 근접도 점수 (한국장 핵심 팩터): 고가의 75% 이하 0점 → 95% 이상 만점
+KR_HIGH_GAP_SCORE = 60.0
+KR_HIGH_GAP_FLOOR, KR_HIGH_GAP_FULL = 0.75, 0.95
+# 과거 데이터로 검증 못 한 수급 점수는 동점자 정리용으로만 (기존 외국인·기관 각 20점 → 5점)
+KR_SUPPLY_SCORE_EACH = 5.0
+# OBV 계산 구간: 데이터 시작점에 따라 값이 달라지므로 예전과 같은 6개월로 고정
+OBV_WINDOW = 125
 
 def check_recent_events(ticker, df, today_close):
     # 티커가 없으면(백테스트 등) DB 조회를 건너뜀
@@ -204,7 +218,11 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     df['RSI'] = calculate_rsi(df['Close'])
     df['SMA_20'] = df['Close'].rolling(window=20).mean()
     df['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean()
-    df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
+    # 일봉을 1년치 받더라도 OBV는 최근 OBV_WINDOW일부터 누적 (예전 6개월 데이터와 같은 값)
+    obv_start = max(0, len(df) - OBV_WINDOW)
+    obv_inc = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0)
+    obv_inc.iloc[:obv_start + 1] = 0
+    df['OBV'] = obv_inc.cumsum()
     df['OBV_SMA_20'] = df['OBV'].rolling(window=20).mean()
     
     df['BB_Upper'] = df['SMA_20'] + (2 * df['Close'].rolling(window=20).std())
@@ -247,8 +265,9 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
     
     today_weekday = df.index[-1].weekday()
-    # 목·금은 주말 리스크 때문에 기준 +10점
-    BUY_THRESHOLD = BUY_THRESHOLD_BY_MARKET.get(market_type, 50.0) + (10.0 if today_weekday in [3, 4] else 0.0)
+    # 목·금은 주말 리스크 때문에 기준 가산 (시장별)
+    weekend_bump = WEEKEND_BUMP_BY_MARKET.get(market_type, 0.0) if today_weekday in [3, 4] else 0.0
+    BUY_THRESHOLD = BUY_THRESHOLD_BY_MARKET.get(market_type, 50.0) + weekend_bump
     
     score = 0.0
     reasons = []
@@ -325,20 +344,21 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         score += min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
         
     else: 
-        score += get_rsi_score(today_rsi, 15.0)
-        score += min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
-        
-        vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
-        score += min(15.0, (vol_ratio / 2.0) * 15.0)
-        
-        poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
-        score += min(15.0, (poc_gap / 3.0) * 15.0) if poc_gap > 0 else 0.0
+        # 💡 [변경] 한국장 스코어링 교체 (2021-01~2026-10 코스피100·코스닥100 팩터 연구)
+        #    - RSI·20일선 이격·거래량·매물대 점수는 미래 수익률 예측력이 없거나 오히려 역방향이었음
+        #      (기존 점수로 매일 상위 5종목을 고르면 무작위 선택보다 성과가 낮았음)
+        #    - 52주 고가 근접도는 학습(2021-23)·검증(2024-26) 두 기간 모두 일관되게 유효 → 핵심 팩터
+        #    - 하이킨아시 점수(위에서 반영)는 고가 근접 종목 사이의 순위를 가르는 데 도움이 됐음
+        high_gap = today_close / high_52w if high_52w > 0 else 0.0
+        high_gap_score = KR_HIGH_GAP_SCORE * min(1.0, max(0.0, (high_gap - KR_HIGH_GAP_FLOOR) / (KR_HIGH_GAP_FULL - KR_HIGH_GAP_FLOOR)))
+        score += high_gap_score
+        reasons.append(f"📈 52주 고가 대비 {high_gap * 100:.0f}% (+{high_gap_score:.1f}점)")
         
         supply_info = supply_info or {}
         foreign_days = supply_info.get('foreign_buy_days', 0)
         inst_days = supply_info.get('inst_buy_days', 0)
-        score += min(20.0, (foreign_days / 3.0) * 20.0)
-        score += min(20.0, (inst_days / 3.0) * 20.0)
+        score += min(KR_SUPPLY_SCORE_EACH, (foreign_days / 3.0) * KR_SUPPLY_SCORE_EACH)
+        score += min(KR_SUPPLY_SCORE_EACH, (inst_days / 3.0) * KR_SUPPLY_SCORE_EACH)
 
     if market_type in ['KR', 'KOSPI', 'KOSDAQ'] and not is_etf:
         event_bonus, event_msgs = check_recent_events(ticker, df, today_close)
