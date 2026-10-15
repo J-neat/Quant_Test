@@ -15,7 +15,9 @@ from data_collector import (get_stock_data, get_fundamental_data, get_supply_dat
 from strategy import apply_multi_factor_strategy
 from visualizer import plot_stock_chart
 from slack_notifier import send_quant_signal, clear_slack_channel, was_posted_today
-from db_manager import save_signal_to_db, get_recent_buy_signals, cleanup_old_db_data, is_signal_saved_today
+from db_manager import (save_signal_to_db, get_recent_buy_signals, cleanup_old_db_data, is_signal_saved_today,
+                        CHART_DIR as APP_CHART_DIR)
+from push_notifier import send_push_all
 from dart_manager import collect_and_save_disclosures
 
 load_dotenv()
@@ -37,6 +39,20 @@ def is_kr_market(market_type):
 def fmt_price(value, market_type):
     """한국 주식은 원 단위, 미국 주식은 소수점 2자리로 표시"""
     return f"{value:,.0f}" if is_kr_market(market_type) else f"{value:,.2f}"
+
+def keep_chart_for_app(chart_path, ticker):
+    """슬랙용 차트를 앱용 보관 폴더(data/charts/)에 복사하고 파일명 반환 (실패 시 None)"""
+    try:
+        if not chart_path or not os.path.exists(chart_path):
+            return None
+        os.makedirs(APP_CHART_DIR, exist_ok=True)
+        safe = ticker.replace('.', '_').replace('/', '_')
+        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M')}_{safe}.png"
+        shutil.copyfile(chart_path, os.path.join(APP_CHART_DIR, file_name))
+        return file_name
+    except Exception as e:
+        print(f"  ⚠️ [앱 차트 보관 실패] {e}")
+        return None
 
 def clean_charts_folder():
     folder_path = "charts"
@@ -107,7 +123,7 @@ def send_position_tracking_report(token, channel_id, markets=None):
             since += f", {signal_data['signal_count']}일 추천됨"
         
         try:
-            df = get_stock_data(ticker, period='6mo')
+            df = get_stock_data(ticker, period='1y')
             if df is None or len(df) < 20: continue
             fundamentals = get_fundamental_data(ticker)
             supply_info = get_supply_data(ticker, market_type)
@@ -203,7 +219,7 @@ if __name__ == "__main__":
         
         for ticker, name in stock_dict.items():
             try:
-                raw_data = get_stock_data(ticker, period='6mo')
+                raw_data = get_stock_data(ticker, period='1y')
                 if raw_data is None or len(raw_data) < 20: continue
 
                 fundamentals = get_fundamental_data(ticker)
@@ -223,7 +239,7 @@ if __name__ == "__main__":
                     open_price = raw_data['Open'].iloc[-1] 
                     
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    chart_path = plot_stock_chart(processed_data, display_name, score, reasons, fundamentals)
+                    chart_path = plot_stock_chart(processed_data.tail(125), display_name, score, reasons, fundamentals)
                     
                     msg = (f"🚨 *[매수 추천 봇]*\n"
                            f"⏰ `{now}`\n📌 {display_name}\n"
@@ -234,7 +250,17 @@ if __name__ == "__main__":
                            f"📊 스코어: `{score}점`\n💡 사유: {', '.join(reasons)}")
                     
                     send_quant_signal(SLACK_TOKEN, SLACK_CHANNEL, msg, chart_path)
-                    save_signal_to_db(ticker, name, current_price, score, reasons, market_type)
+                    # 📱 앱용: 차트는 charts/가 실행마다 비워지므로 data/charts/에 따로 보관
+                    app_chart = keep_chart_for_app(chart_path, ticker)
+                    saved = save_signal_to_db(ticker, name, current_price, score, reasons, market_type,
+                                              open_price=open_price, tp=price_targets['TP'], sl=price_targets['SL'],
+                                              chart_path=app_chart)
+                    if saved:
+                        send_push_all(
+                            f"🚨 매수 추천 · {name}",
+                            f"{score}점 | 현재가 {fmt_price(current_price, market_type)} | "
+                            f"익절 {fmt_price(price_targets['TP'], market_type)} / 손절 {fmt_price(price_targets['SL'], market_type)}",
+                            url=f"/?tab=today&ticker={ticker}", tag=ticker)
                     print(f"  ✅ [추천] {display_name} ({score}점)")
             except Exception as e:
                 # 💡 [수정] 에러를 조용히 삼키지 않고 원인을 출력 (어떤 종목이 왜 빠졌는지 확인 가능)
