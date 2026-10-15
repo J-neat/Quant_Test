@@ -9,6 +9,7 @@
 #    - 예전 Supabase 데이터 이전: python migrate_supabase_to_sqlite.py
 
 import os
+import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,12 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     p256dh     TEXT NOT NULL,
     auth       TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,        -- JSON
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS bot_runs (
@@ -291,3 +298,20 @@ def mark_stale_runs_failed():
     """서버가 꺼지면서 'running'으로 남은 기록 정리 (서버 시작 시 호출)"""
     with closing(get_connection()) as conn, conn:
         conn.execute("UPDATE bot_runs SET status = 'failed', finished_at = ? WHERE status = 'running'", (utc_now_iso(),))
+
+# ---------------------------------------------------------
+# app_settings (앱에서 바꾸는 설정 — 예: 자동 실행 시간표)
+# ---------------------------------------------------------
+def get_setting(key, default=None):
+    with closing(get_connection()) as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return json.loads(row["value"]) if row else default
+
+def set_setting(key, value):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                     (key, json.dumps(value, ensure_ascii=False), utc_now_iso()))
+
+def delete_setting(key):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
