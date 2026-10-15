@@ -20,6 +20,9 @@ Quant_Test/
 ├── strategy.py           # 멀티팩터 스코어링 및 매수 시그널
 ├── dart_manager.py       # DART 공시 + 네이버 뉴스 호재/악재 수집
 ├── db_manager.py         # 로컬 SQLite DB(data/quant.db) 저장/조회/청소
+├── web_app.py            # 아이폰 앱(PWA) 서버 + 자동 실행 스케줄러 (start_app.bat)
+├── push_notifier.py      # 앱 푸시 알림 (웹 푸시)
+├── app_static/           # 앱 화면 (HTML/CSS/JS, 아이콘, 서비스 워커)
 ├── db_viewer.py          # 로컬 DB 조회 (python db_viewer.py [summary|signals|disclosures|today])
 ├── migrate_supabase_to_sqlite.py # 예전 Supabase 데이터 → 로컬 DB 1회 이전
 ├── visualizer.py         # 차트 생성
@@ -153,3 +156,40 @@ pip freeze > requirements.txt
 * `.env` 파일은 Git에 업로드하지 않습니다.
 * Slack Bot Token은 외부에 노출되지 않도록 주의하세요.
 * `requirements.txt`는 라이브러리 변경 시마다 업데이트하는 것을 권장합니다.
+
+---
+
+# 4. 아이폰 앱 (슬랙과 별도)
+
+PC에서 `web_app.py`를 켜두면 아이폰에서 앱처럼 쓸 수 있습니다. 슬랙 알림은 그대로 오고, 앱 푸시 알림이 추가로 옵니다.
+`web_app.py` 안에 자동 실행 스케줄러가 들어 있으므로 **`scheduler.py`와 동시에 켜지 마세요** (중복 실행).
+
+## 4.1 PC 준비 (1회)
+1. 패키지 설치: `pip install -r requirements.txt`
+2. [Tailscale](https://tailscale.com/download/windows) 설치 후 로그인 (무료, 내 기기끼리만 연결되는 비공개 네트워크)
+3. Tailscale 관리 페이지(login.tailscale.com/admin/dns)에서 **MagicDNS**와 **HTTPS Certificates**를 켬
+4. PowerShell(관리자 아님)에서 HTTPS 주소 연결 — 한 번만 하면 재부팅 후에도 유지:
+   ```powershell
+   tailscale serve --bg 8000
+   tailscale serve status     # https://<PC이름>.<tailnet이름>.ts.net 주소 확인
+   ```
+5. 서버 켜기: `start_app.bat` 더블클릭 (또는 `python web_app.py`)
+
+## 4.2 아이폰 설치 (1회)
+1. App Store에서 **Tailscale** 설치 → PC와 같은 계정으로 로그인 → VPN 켜기
+2. **Safari**로 `https://<PC이름>.<tailnet이름>.ts.net` 접속 (크롬 X — 홈 화면 앱/알림은 Safari만 지원)
+3. 아래 **공유 버튼 → 홈 화면에 추가 → 추가**
+4. 홈 화면의 **퀀트시그널** 아이콘으로 실행 → **봇** 탭 → **매수 추천 알림** 켜기 → 허용
+5. **테스트 알림 보내기**로 확인
+
+## 4.3 옵션 (.env)
+```env
+APP_TOKEN=원하는비밀번호   # 앱 잠금 (Tailscale만 쓰면 없어도 됨)
+APP_PORT=8000
+APP_HOST=127.0.0.1         # 0.0.0.0 이면 같은 와이파이에서 http://PC IP:8000 접속 가능 (알림은 불가)
+APP_SCHEDULER=1            # 0 이면 서버 안 자동 실행 끔
+PUSH_CONTACT=mailto:me@example.com   # 푸시 서비스 연락처 (선택)
+```
+
+## 4.4 PC 켜질 때 자동 시작 (선택)
+`Win + R` → `shell:startup` → 열린 폴더에 `start_app.bat` **바로가기**를 넣으면 로그인할 때 서버가 켜집니다.
