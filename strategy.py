@@ -6,21 +6,35 @@
 import pandas as pd
 import numpy as np
 import os
+from datetime import datetime
 import yfinance as yf
-from supabase import create_client
+from db_manager import get_disclosures
+
+# 공시/뉴스 이벤트 점수 합산 상한·하한 (뉴스가 여러 건 겹쳐도 점수가 무한히 쌓이지 않도록)
+EVENT_SCORE_MAX = 20.0
+EVENT_SCORE_MIN = -30.0
+
+# 악재 공시 1건당 페널티: 공시 후 하락폭이 클수록(이미 반영될수록) 약해지되 바닥(-15점) 아래로는 줄지 않음
+BAD_PENALTY_MAX = -30.0       # 하락 0% 이하(미반영)일 때
+BAD_PENALTY_FLOOR = -15.0     # BAD_FULL_REFLECT_PCT 이상 하락(충분히 반영)일 때
+BAD_FULL_REFLECT_PCT = 10.0
+
+# 시장별 매수 기준 점수 (목·금은 +10)
+# 💡 나스닥: 2025-10~2026-10 나스닥100 일별 점수 분포 기준 (52주 고가·거래량 공짜 점수 제거 후)
+#    50점 → 하루 평균 35건 / 80점(목금 90) → 하루 평균 5.8건(중앙값 4건)
+BUY_THRESHOLD_BY_MARKET = {'NASDAQ': 80.0, 'KOSPI': 50.0, 'KOSDAQ': 50.0}
 
 def check_recent_events(ticker, df, today_close):
+    # 티커가 없으면(백테스트 등) DB 조회를 건너뜀
+    if not ticker:
+        return 0, []
     try:
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY")
-        supabase = create_client(url, key)
-        
-        response = supabase.table("dart_disclosures").select("event_type, report_title, rcept_dt").eq("ticker", ticker).execute()
+        disclosures = get_disclosures(ticker)
         
         event_score = 0
         event_msgs = []
         
-        for item in response.data:
+        for item in disclosures:
             event_type = item['event_type']
             title = item['report_title']
             rcept_dt = f"{item['rcept_dt'][:4]}-{item['rcept_dt'][4:6]}-{item['rcept_dt'][6:]}"
@@ -37,21 +51,27 @@ def check_recent_events(ticker, df, today_close):
                 if price_change_pct >= 5.0:
                     event_msgs.append(f"⚠️ 호재 선반영 차단: {title[:15]}... (이미 {price_change_pct:.1f}% 상승)")
                 else:
-                    bonus = max(0.0, 10.0 * (5.0 - price_change_pct) / 5.0)
+                    # 공시 이후 주가가 하락했어도 건당 보너스는 최대 10점
+                    bonus = min(10.0, max(0.0, 10.0 * (5.0 - price_change_pct) / 5.0))
                     event_score += bonus
                     event_msgs.append(f"🎉 호재공시(+{bonus:.1f}): {title[:15]}... (반영률 {price_change_pct:.1f}%)")
                     
             elif event_type == 'BAD':
-                if price_change_pct <= -10.0:
-                    event_score -= 15.0
-                    event_msgs.append(f"⚠️ 악재 과매도: {title[:15]}... (이미 {price_change_pct:.1f}% 하락, -15점)")
+                # 💡 [수정] 하락폭 0% → -30점, 10% 이상 하락 → -15점(바닥)으로 연속 선형 감소
+                #    (기존: -9.9%면 약 -0.3점인데 -10%부터 갑자기 -15점이 되는 불연속 구간이 있었음)
+                # 악재 후 주가가 오히려 올랐다면 아직 미반영 → 최대 페널티
+                drop_pct = min(BAD_FULL_REFLECT_PCT, max(0.0, -price_change_pct))
+                penalty = BAD_PENALTY_MAX + (BAD_PENALTY_FLOOR - BAD_PENALTY_MAX) * drop_pct / BAD_FULL_REFLECT_PCT
+                event_score += penalty
+                if drop_pct >= BAD_FULL_REFLECT_PCT:
+                    event_msgs.append(f"⚠️ 악재 과매도: {title[:15]}... (이미 {price_change_pct:.1f}% 하락, {penalty:.1f}점)")
                 else:
-                    penalty = -30.0 * (10.0 - abs(price_change_pct)) / 10.0
-                    event_score += penalty
                     event_msgs.append(f"🚨 악재공시({penalty:.1f}): {title[:15]}... (반영률 {price_change_pct:.1f}%)")
                 
+        event_score = max(EVENT_SCORE_MIN, min(EVENT_SCORE_MAX, event_score))
         return event_score, event_msgs
-    except:
+    except Exception as e:
+        print(f"  ⚠️ [{ticker}] 공시 이벤트 점수 계산 실패 ({type(e).__name__}: {e}) → 0점 처리")
         return 0, []
 
 def calculate_rsi(series, period=14):
@@ -114,6 +134,9 @@ def calculate_heikin_ashi(df):
     return ha_df
 
 def check_30min_rule(ticker):
+    # 티커가 없으면(백테스트 등) 오늘 장중 데이터를 볼 이유가 없으므로 건너뜀
+    if not ticker:
+        return 'PASS', 0, ""
     try:
         intra_df = yf.download(ticker, period='1d', interval='5m', progress=False)
         
@@ -122,6 +145,12 @@ def check_30min_rule(ticker):
 
         if isinstance(intra_df.columns, pd.MultiIndex):
             intra_df.columns = intra_df.columns.get_level_values(0)
+
+        # 장 시작 전에 실행하면 yfinance가 '전 거래일' 분봉을 주므로, 오늘 데이터가 아니면 판단 보류
+        last_ts = intra_df.index[-1]
+        now_local = datetime.now(last_ts.tz) if last_ts.tz is not None else datetime.now()
+        if last_ts.date() != now_local.date():
+            return 'PASS', 0, ""
 
         first_30m = intra_df.iloc[:6]
         open_price = first_30m['Open'].iloc[0]
@@ -154,6 +183,13 @@ def check_30min_rule(ticker):
     except Exception as e:
         return 'PASS', 0, ""
 
+INVERSE_KEYWORDS = ['인버스', 'INVERSE', 'SHORT', 'BEAR']
+
+def is_inverse_etf(stock_name):
+    """종목명으로 인버스(지수 하락에 베팅) ETF인지 판별"""
+    name = str(stock_name).upper()
+    return any(keyword in name for keyword in INVERSE_KEYWORDS)
+
 def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=None, stock_name="", is_bull_market=True, ticker=""):
     if df is None or len(df) < 20:
         return 'HOLD', 0, ["데이터 부족"], df, {}
@@ -177,8 +213,14 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     df['Turnover'] = df['Close'] * df['Volume']
     avg_turnover_5d = df['Turnover'].rolling(window=5).mean().iloc[-1]
 
-    if not is_bull_market:
+    # 💡 [수정] 시장 국면 필터: 일반 종목은 하락장에서, 인버스 ETF는 상승장에서 매수 차단
+    #    (기존엔 인버스도 하락장에서 막혀서, 정작 인버스가 필요한 하락장에 매수할 수 없었음)
+    #    is_bull_market=None 이면 국면을 모르는 것(백테스트)으로 보고 필터 생략
+    is_inverse = is_inverse_etf(stock_name)
+    if is_bull_market is False and not is_inverse:
         return 'HOLD', 0, ["🚫 거시경제 하락장 (지수 200일선 하회)으로 인한 매수 차단"], df, {}
+    if is_bull_market is True and is_inverse:
+        return 'HOLD', 0, ["🚫 상승장 (지수 200일선 상회)이라 인버스 ETF 매수 차단"], df, {}
 
     if market_type == 'NASDAQ':
         min_turnover = 10_000_000 
@@ -205,7 +247,8 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
     gap_percent = ((today_close - today_sma_20) / today_sma_20 * 100) if today_sma_20 > 0 else 0.0
     
     today_weekday = df.index[-1].weekday()
-    BUY_THRESHOLD = 60.0 if today_weekday in [3, 4] else 50.0
+    # 목·금은 주말 리스크 때문에 기준 +10점
+    BUY_THRESHOLD = BUY_THRESHOLD_BY_MARKET.get(market_type, 50.0) + (10.0 if today_weekday in [3, 4] else 0.0)
     
     score = 0.0
     reasons = []
@@ -266,13 +309,16 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
         if roe > 0:
             score += min(10.0, (roe / 0.12) * 5.0) 
             
+        # 💡 [수정] 52주 고가 근접도: 예전엔 고가의 70%만 돼도 14.7점(사실상 공짜 점수)
+        #    → 고가의 85% 이하 0점, 95% 이상 만점으로 선형
         high_gap = today_close / high_52w if high_52w > 0 else 0.0
-        score += min(20.0, (high_gap / 0.95) * 20.0)
+        score += 20.0 * min(1.0, max(0.0, (high_gap - 0.85) / 0.10))
         
         score += get_rsi_score(today_rsi, 15.0)
         
+        # 💡 [수정] 거래량: 예전엔 평소 거래량(1배)만 돼도 7.5점 → 평소 이하 0점, 2배 이상 만점
         vol_ratio = today_volume / today_vol_sma_20 if today_vol_sma_20 > 0 else 1.0
-        score += min(15.0, (vol_ratio / 2.0) * 15.0)
+        score += 15.0 * min(1.0, max(0.0, vol_ratio - 1.0))
         score += min(15.0, (gap_percent / 3.0) * 15.0) if gap_percent > 0 else 0.0
         
         poc_gap = ((today_close - poc_price) / poc_price * 100) if poc_price > 0 else 0.0
@@ -333,6 +379,10 @@ def apply_multi_factor_strategy(df, fundamentals, market_type='US', supply_info=
             
         stop_loss = today_open - (today_atr * 2.0)
         
-    price_targets = {'TP': int(target_price), 'SL': int(stop_loss)}
+    # 한국 주식은 원 단위 정수, 미국 주식은 센트 단위까지 유지 (int()로 자르면 $12.87 → 12 가 됨)
+    if market_type in ['KR', 'KOSPI', 'KOSDAQ']:
+        price_targets = {'TP': int(round(target_price)), 'SL': int(round(stop_loss))}
+    else:
+        price_targets = {'TP': round(float(target_price), 2), 'SL': round(float(stop_loss), 2)}
     
     return signal, round(score, 1), reasons, df, price_targets
