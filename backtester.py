@@ -11,7 +11,7 @@
 #   2. 시장 국면을 항상 무시 → 그날 기준 지수 200일선으로 국면 필터 적용 (인버스 ETF 포함)
 #   3. 시그널 당일 종가로 매수(그날 종가를 보고 그 가격에 사는 셈) → 다음 날 시가로 매수
 #   4. 재무 데이터를 PER 12 / ROE 15% 등 유리한 값으로 고정 → 실제 현재 재무 데이터 사용
-#   5. 판단에 쓰는 일봉 길이를 실전과 같은 6개월(LOOKBACK)로 맞춤 (OBV 등이 데이터 시작점에 따라 달라짐)
+#   5. 판단에 쓰는 일봉 길이를 실전과 같은 1년(LOOKBACK)으로 맞춤 (52주 고가 계산)
 #   6. 같은 기간 단순 보유(Buy & Hold) 수익률과 비교
 # ⚠️ 남은 한계: 유니버스가 '현재' 구성 종목이라 생존 편향이 남아 있고, 재무 데이터도 현재 값(미래 정보)임
 
@@ -33,7 +33,7 @@ from data_collector import (get_fundamental_data, get_nasdaq_100, get_kospi_top_
 
 load_dotenv()
 
-LOOKBACK = 125              # 실전(main.py)은 6개월(약 125거래일) 일봉으로 판단
+LOOKBACK = 250              # 실전(main.py)은 1년(약 250거래일) 일봉으로 판단
 FEE = 0.002                 # 매수·매도 각각 적용
 INITIAL_CAPITAL = 1_000_000
 CHART_DIR = "backtest_charts"
@@ -193,8 +193,8 @@ def run_portfolio_backtest(ticker_list, start_date, end_date, label="전체 유�
     ticker_list = {t: v if isinstance(v, tuple) else (v, guess_market(t)) for t, v in ticker_list.items()}
 
     print(f"🚀 [{label}] 백테스트 시작! ({start_date} ~ {end_date}, {len(ticker_list)}종목)")
-    # 첫 테스트일부터 6개월치 일봉이 확보되도록 데이터를 앞당겨 받음
-    data_start = (pd.Timestamp(start_date) - timedelta(days=LOOKBACK * 2)).strftime("%Y-%m-%d")
+    # 첫 테스트일부터 1년치 일봉이 확보되도록 데이터를 앞당겨 받음
+    data_start = (pd.Timestamp(start_date) - timedelta(days=int(LOOKBACK * 1.6))).strftime("%Y-%m-%d")
 
     regimes = {}
     all_results = []
