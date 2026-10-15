@@ -21,3 +21,6 @@ __pycache__/
 
 # 윈도우 시스템 파일
 Thumbs.db
+
+# 팩터 연구 데이터셋 (수십 MB, 재생성 가능)
+research/*.pkl
