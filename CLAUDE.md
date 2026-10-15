@@ -72,4 +72,5 @@
 - 슬랙은 그대로 유지, 앱은 별도 채널. 탭: 오늘(시장 국면·오늘 추천) / 추적(최초 추천가 대비 수익률·익절/손절 상태) / 공시 / 봇(수동 실행·로그·알림 설정·시간표)
 - DB 추가: quant_signals에 open_price/tp/sl/chart_path 컬럼(자동 ALTER), push_subscriptions, bot_runs 테이블. 앱 차트는 data/charts/ (90일 보관)
 - 한국식 색상(상승 빨강/하락 파랑). 정적 파일 바꾸면 index.html·sw.js의 `?v=` 와 캐시 이름 올릴 것
-- Tailscale 미설치 상태 — 사용자가 설치·로그인 필요 (README 4장)
+- Tailscale 설치·serve 완료: https://laptop-9i91gfr9.taila87c3d.ts.net → 127.0.0.1:8000 (노트북이라 절전 시 서버 멈춤 주의)
+- 자동 실행 시간표는 앱에서 편집 → DB app_settings['schedule'] (`scheduler.load_schedule()`), 코드의 KR/US_RUN_TIMES는 기본값
