@@ -82,8 +82,8 @@ def plot_stock_chart(df, ticker, score, reasons, fundamentals=None):
     
     fund_text = ""
     if fundamentals:
-        per = fundamentals.get('PER', 0)
-        pbr = fundamentals.get('PBR', 0)
+        per = fundamentals.get('PER') or 0
+        pbr = fundamentals.get('PBR') or 0
         roe = (fundamentals.get('ROE') or 0) * 100
         debt = fundamentals.get('Debt_Ratio') or 0
         fund_text = f" | PER: {per:.1f}배 | PBR: {pbr:.1f}배 | ROE: {roe:.1f}% | 부채비율: {debt:.1f}%"
@@ -105,5 +105,9 @@ def plot_stock_chart(df, ticker, score, reasons, fundamentals=None):
     plt.subplots_adjust(bottom=0.18)
 
     plt.tight_layout()
-    plt.savefig(f"charts/{ticker}_chart.png", dpi=120, bbox_inches='tight')
+    # 💡 [수정] 종목명에 윈도우 파일명 금지 문자(\ / : * ? " < > |)가 있으면 저장이 실패하므로 치환
+    safe_name = re.sub(r'[\\/:*?"<>|]', '_', str(ticker))
+    chart_path = os.path.join("charts", f"{safe_name}_chart.png")
+    plt.savefig(chart_path, dpi=120, bbox_inches='tight')
     plt.close('all')
+    return chart_path
