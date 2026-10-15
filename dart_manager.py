@@ -6,18 +6,24 @@ import requests
 import OpenDartReader
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from supabase import create_client
+from db_manager import save_disclosure
 from dotenv import load_dotenv
 import contextlib
 import io
 
 load_dotenv()
 
+_dart_client = None
+
 def get_dart_client():
-    api_key = os.environ.get("DART_API_KEY")
-    if not api_key:
-        raise ValueError("🚨 DART_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
-    return OpenDartReader(api_key)
+    """DART 클라이언트는 생성 시 기업코드 파일(수 MB)을 읽으므로 한 번만 만들어 재사용"""
+    global _dart_client
+    if _dart_client is None:
+        api_key = os.environ.get("DART_API_KEY")
+        if not api_key:
+            raise ValueError("🚨 DART_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+        _dart_client = OpenDartReader(api_key)
+    return _dart_client
 
 def fetch_naver_news(clean_ticker):
     """네이버 금융에서 해당 종목의 최신 뉴스 제목들을 크롤링합니다."""
@@ -39,9 +45,6 @@ def collect_and_save_disclosures(ticker, stock_name):
     """최근 1주일간의 DART 공시와 오늘의 뉴스를 수집하여 호재/악재를 DB에 저장합니다."""
     try:
         dart = get_dart_client()
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY")
-        supabase = create_client(url, key)
 
         clean_ticker = ticker.replace('.KS', '').replace('.KQ', '')
         start_date = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d')
@@ -95,29 +98,15 @@ def collect_and_save_disclosures(ticker, stock_name):
                 
             if event_type:
                 try:
-                    # DB 중복 체크
-                    check_exist = supabase.table('dart_disclosures').select('id') \
-                        .eq('ticker', ticker).eq('report_title', event_title).execute()
-                    
-                    if not check_exist.data:
-                        data = {
-                            "ticker": ticker,
-                            "stock_name": stock_name,
-                            "report_title": event_title,
-                            "event_type": event_type,
-                            "rcept_dt": event_date
-                        }
-                        # 실제 DB 인서트 실행
-                        insert_res = supabase.table("dart_disclosures").insert(data).execute()
-                        
+                    # 같은 종목·같은 제목이 이미 있으면 DB가 알아서 무시 (UNIQUE 제약)
+                    if save_disclosure(ticker, stock_name, event_title, event_type, event_date):
                         if event_type == 'GOOD':
                             print(f"  🎉 [DB 적재 성공] {stock_name}: {event_title[:25]}... (GOOD)")
                         else:
                             print(f"  🚨 [DB 적재 성공] {stock_name}: {event_title[:25]}... (BAD)")
                 
                 except Exception as db_insert_err:
-                    # 💡 여기가 핵심 디버깅 포인트: Supabase가 거부하면 여기에 원인이 찍힘
-                    print(f"  ❌ [Supabase 적재 에러] {stock_name}({ticker}) 저장 실패: {db_insert_err}")
+                    print(f"  ❌ [DB 적재 에러] {stock_name}({ticker}) 저장 실패: {db_insert_err}")
                     
     except Exception as global_err:
         print(f"  ❌ [DART 매니저 시스템 치명적 에러]: {global_err}")
