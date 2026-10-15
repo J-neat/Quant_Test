@@ -16,6 +16,8 @@
 - `data_collector.py` — yfinance 시세/재무, 네이버 금융 외국인·기관 수급
 - `dart_manager.py` — DART 공시 + 네이버 뉴스 키워드로 호재/악재 판별 → `dart_disclosures` 테이블
 - `db_manager.py` — **유일한 DB 접근 계층** (SQLite). `quant_signals`(보관 365일), `dart_disclosures`(30일, ticker+report_title UNIQUE)
+- `web_app.py` — 아이폰 앱(PWA) 서버 (FastAPI, `app_static/`). 스케줄러 내장(`scheduler.due_jobs` 재사용) → scheduler.py와 동시 실행 금지. 기본 127.0.0.1:8000, Tailscale serve로 HTTPS
+- `push_notifier.py` — 웹 푸시 (VAPID 키 `data/vapid_private.pem` 자동 생성), main.py가 BUY 저장 시 슬랙과 별도로 전송
 - `db_viewer.py` — 로컬 DB 조회 (`python db_viewer.py [summary|signals|disclosures|today|sql "..."]`)
 - `migrate_supabase_to_sqlite.py` — 일시정지된 Supabase 프로젝트 Resume 후 1회 실행해 예전 데이터 이전 (중복 실행 안전)
 - `visualizer.py` — 차트 PNG 생성 (`charts/`), 저장 경로 반환
@@ -58,3 +60,16 @@
 - 나스닥 추천 과다(하루 50건): 52주 고가 근접도(고가 70%만 돼도 14.7점)·거래량(평소 1배에 7.5점) 공짜 점수 제거 + 시장별 기준 `BUY_THRESHOLD_BY_MARKET`(NASDAQ 80, 목·금 +10)
   - 근거: 2025-10~2026-10 나스닥100 일별 점수 분포 → 기준 80이면 하루 평균 5.8건(중앙값 4)
   - ⚠️ 같은 분석에서 점수의 5일 후 수익률 예측력은 거의 없었음 (추천 평균 ~0.6% vs 전체 평균 0.67%, 승률 ~51%) — 전략 자체 개선은 별도 과제
+
+## 2026-10-15 전략 예측력 연구 (`research/`)
+- 2021-01~2026-10 나스닥100·코스피100·코스닥100, 상승장 날짜만, 다음 날 시가 진입 → 10일 후 초과수익으로 팩터 검증 (학습 2021-23 / 검증 2024-26)
+- 한국장 점수 교체: RSI·20일선 이격·거래량·매물대 제거(무효/역방향, 기존 점수 상위 5종목이 무작위보다 못함) → 52주 고가 근접(60점) + 하이킨아시 + 수급(검증 불가라 각 5점) + 공시. 기준 70점, 목·금 가산 없음
+- 실전 일봉 6개월 → 1년 (예전 '52주 고가'가 실제론 6개월 고가였음). OBV는 예전과 같게 최근 125일부터 누적, 차트는 최근 125일만
+- 나스닥: 유효한 팩터 없음 → 구조 유지, 기준 80(목·금 90). 1년 데이터 기준으로 추천 건수 재확인함
+- 백테스터 LOOKBACK 250
+
+## 2026-10-15 아이폰 앱 (PWA)
+- 슬랙은 그대로 유지, 앱은 별도 채널. 탭: 오늘(시장 국면·오늘 추천) / 추적(최초 추천가 대비 수익률·익절/손절 상태) / 공시 / 봇(수동 실행·로그·알림 설정·시간표)
+- DB 추가: quant_signals에 open_price/tp/sl/chart_path 컬럼(자동 ALTER), push_subscriptions, bot_runs 테이블. 앱 차트는 data/charts/ (90일 보관)
+- 한국식 색상(상승 빨강/하락 파랑). 정적 파일 바꾸면 index.html·sw.js의 `?v=` 와 캐시 이름 올릴 것
+- Tailscale 미설치 상태 — 사용자가 설치·로그인 필요 (README 4장)
