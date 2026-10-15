@@ -5,8 +5,15 @@ venv/
 # 비밀번호 및 API 키
 .env
 
+# 로컬 DB (SQLite, 개인 데이터)
+data/
+
 # 분석 결과물
 charts/
+backtest_charts/
+
+# OpenDartReader 기업코드 캐시 (수 MB, 자동 생성)
+docs_cache/
 
 # 파이썬 캐시 파일
 __pycache__/
